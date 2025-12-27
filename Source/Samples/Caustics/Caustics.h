@@ -40,8 +40,6 @@ using namespace Falcor;
 class Caustics : public SampleApp
 {
 public:
-    using UniquePtr = std::unique_ptr<Caustics>;
-public:
     Caustics(const SampleAppConfig& config);
     ~Caustics();
 
@@ -69,6 +67,7 @@ private:
     float mEmitSize = 30.0;
     float mIntensity = 2.0f;
     float mRoughThreshold = 0.1f;
+
     enum AreaType
     {
         AREA_AVG_SQUARE = 0,
@@ -76,6 +75,7 @@ private:
         AREA_MAX_SQUARE = 2,
         AREA_EXACT = 3
     } mAreaType = AREA_AVG_SQUARE;
+
     float mIOROveride = 1.5f;
     int mColorPhoton = 0;
     int mPhotonIDScale = 50;
@@ -100,6 +100,7 @@ private:
     float mUpdateSpeed = 0.2f;
     float mVarianceGain = 0.0f;
     float mDerivativeGain = 0.0f;
+
     enum SamplePlacement
     {
         SAMPLE_PLACEMENT_RANDOM = 0,
@@ -214,10 +215,8 @@ private:
     float3 mLightDirection;
     float2 mLightAngleSpeed{0, 0};
 
-    // ref = SharedPtr
-
-    ref<Model> mpQuad;
-    ref<Model> mpSphere;
+    ref<Scene> mpQuad;
+    ref<Scene> mpSphere;
     ref<Scene> mpScene; // RtScene
     ref<Camera> mpCamera;
     std::unique_ptr<FirstPersonCameraController> mCamController;
@@ -226,10 +225,10 @@ private:
     ref<RasterPass> mpRasterPass;
 
     // Clear draw argument
-    ref<Program> mpDrawArgumentProgram; // ComputeProgram
-    ref<ProgramVars> mpDrawArgumentVars; // ref<ProgramVars>
+    ref<Program> mpDrawArgumentProgram;     // ComputeProgram
+    ref<ProgramVars> mpDrawArgumentVars;    // ref<ProgramVars>
     ref<ComputeState> mpDrawArgumentState;
-    ref<Buffer> mpDrawArgumentBuffer; //StructuredBuffer
+    ref<Buffer> mpDrawArgumentBuffer;       //StructuredBuffer
 
     // g-pass
     ref<RasterPass> mpGPass;
@@ -239,7 +238,7 @@ private:
         ref<Texture> mpDiffuseTex;
         ref<Texture> mpSpecularTex;
         ref<Texture> mpDepthTex;
-        ref<Fbo> mpGPassFbo;
+        ref<Fbo>     mpGPassFbo;
     };
     GBuffer mGBuffer[2];
     ref<Texture> mpSmallPhotonTex;
@@ -262,35 +261,35 @@ private:
     ref<Texture> mpUniformNoise;
 
     // update ray density result
-    ref<Program> mpUpdateRayDensityProgram; // ComputeProgram
-    ref<ProgramVars> mpUpdateRayDensityVars; //ref<ProgramVars>
+    ref<Program> mpUpdateRayDensityProgram;  // ComputeProgram
+    ref<ProgramVars> mpUpdateRayDensityVars; // ref<ProgramVars>
     ref<ComputeState> mpUpdateRayDensityState;
 
     // analyse trace result
-    ref<Program> mpAnalyseProgram; // ComputeProgram
-    ref<ProgramVars> mpAnalyseVars;       //ref<ProgramVars>
+    ref<Program> mpAnalyseProgram;      // ComputeProgram
+    ref<ProgramVars> mpAnalyseVars;     // ref<ProgramVars>
     ref<ComputeState> mpAnalyseState;
-    ref<Buffer> mpRayArgumentBuffer; // StructuredBuffer
+    ref<Buffer> mpRayArgumentBuffer;    // StructuredBuffer
 
     // generate ray count
-    ref<Program> mpGenerateRayCountProgram;  // ComputeProgram
-    ref<ProgramVars> mpGenerateRayCountVars; // ref<ProgramVars>
+    ref<Program> mpGenerateRayCountProgram;     // ComputeProgram
+    ref<ProgramVars> mpGenerateRayCountVars;    // ref<ProgramVars>
     ref<ComputeState> mpGenerateRayCountState;
-    ref<Buffer> mpRayCountQuadTree;         // StructuredBuffer
+    ref<Buffer> mpRayCountQuadTree;             // StructuredBuffer
 
     // generate ray count mipmap
-    ref<Program> mpGenerateRayCountMipProgram;              // ComputeProgram
-    ref<ProgramVars> mpGenerateRayCountMipVars;       // ref<ProgramVars>
+    ref<Program> mpGenerateRayCountMipProgram;  // ComputeProgram
+    ref<ProgramVars> mpGenerateRayCountMipVars; // ref<ProgramVars>
     ref<ComputeState> mpGenerateRayCountMipState;
 
     // smooth photon
-    ref<Program> mpSmoothProgram;               // ComputeProgram
-    ref<ProgramVars> mpSmoothVars;        // ref<ProgramVars>
+    ref<Program> mpSmoothProgram;    // ComputeProgram
+    ref<ProgramVars> mpSmoothVars;   // ref<ProgramVars>
     ref<ComputeState> mpSmoothState;
 
     // photon scatter
-    ref<Program>mpPhotonScatterProgram;  // GraphicsProgram
-    ref<ProgramVars> mpPhotonScatterVars;   // GraphicsVars
+    ref<Program>mpPhotonScatterProgram;             // GraphicsProgram
+    ref<ProgramVars> mpPhotonScatterVars;           // GraphicsVars
     ref<GraphicsState> mpPhotonScatterBlendState;
     ref<GraphicsState> mpPhotonScatterNoBlendState;
     ref<Fbo> mpCausticsFbo[2];
@@ -299,23 +298,25 @@ private:
 
     // photon gather
 #define GATHER_PROCESSING_SHADER_COUNT 4
-    ref<Program> mpAllocateTileProgram[GATHER_PROCESSING_SHADER_COUNT];         // ComputeProgram
-    ref<ProgramVars> mpAllocateTileVars[GATHER_PROCESSING_SHADER_COUNT];  // ref<ProgramVars>
+    ref<Program> mpAllocateTileProgram[GATHER_PROCESSING_SHADER_COUNT];     // ComputeProgram
+    ref<ProgramVars> mpAllocateTileVars[GATHER_PROCESSING_SHADER_COUNT];    // ref<ProgramVars>
     ref<ComputeState> mpAllocateTileState[GATHER_PROCESSING_SHADER_COUNT];
-    ref<Program> mpPhotonGatherProgram;              // ComputeProgram
-    ref<ProgramVars> mpPhotonGatherVars;       // ref<ProgramVars>
+
+    ref<Program> mpPhotonGatherProgram;   // ComputeProgram
+    ref<ProgramVars> mpPhotonGatherVars;  // ref<ProgramVars>
     ref<ComputeState> mpPhotonGatherState;
-    ref<Buffer> mpTileIDInfoBuffer; // StructuredBuffer
-    ref<Buffer> mpIDBuffer;   // Buffer
-    ref<Buffer> mpIDCounterBuffer; //Buffer
+
+    ref<Buffer> mpTileIDInfoBuffer;       // StructuredBuffer
+    ref<Buffer> mpIDBuffer;               // Buffer
+    ref<Buffer> mpIDCounterBuffer;        // Buffer
 
     // temporal filter
-    ref<Program> mpFilterProgram;               // ComputeProgram
+    ref<Program> mpFilterProgram;         // ComputeProgram
     ref<ProgramVars> mpFilterVars;        // ref<ProgramVars>
     ref<ComputeState> mpFilterState;
 
     // spacial filter
-    ref<Program> mpSpacialFilterProgram;        // ComputeProgram
+    ref<Program> mpSpacialFilterProgram;  // ComputeProgram
     ref<ProgramVars> mpSpacialFilterVars; // ref<ProgramVars>
     ref<ComputeState> mpSpacialFilterState;
 
@@ -323,7 +324,7 @@ private:
     ref<Program> mpRaytraceProgram; // RtProgram
     ref<RtProgramVars> mpRtVars;
     ref<RtStateObject> mpRtState;
-    RtSceneRenderer::SharedPtr mpRtRenderer;
+    //RtSceneRenderer::SharedPtr mpRtRenderer; // it seems like there is no more RtSceneRenderer class at all
     ref<Texture> mpRtOut;
 
     // composite pass
@@ -332,7 +333,7 @@ private:
     ref<Texture> mpPhotonCountTex;
 
     // RT composite pass
-    ref<Program> mpCompositeRTProgram; //RtProgram
+    ref<Program> mpCompositeRTProgram;      //RtProgram
     ref<RtProgramVars> mpCompositeRTVars;
     ref<RtStateObject> mpCompositeRTState;
 
@@ -343,18 +344,26 @@ private:
     ref<Buffer> mpPixelInfoBuffer;  // StructuredBuffer
     ref<Texture> mpRayDensityTex;
 
-    void setPerFrameVars(RenderContext* pRenderContext, const Fbo* pTargetFbo);
-    void renderRT(RenderContext* pContext, ref<Fbo> pTargetFbo);
+private:
+    // Falcor default
     void loadScene(const std::string& filename, const Fbo* pTargetFbo);
+    void setPerFrameVars(RenderContext* pRenderContext, const Fbo* pTargetFbo);
+    void renderRT(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
+    void renderRaster(RenderContext* pRenderContext, const ref<Fbo>& pTargetFbo);
+
     void loadShader();
+    PhotonTraceShader getPhotonTraceShader();
+
     void setCommonVars(ProgramVars* pVars, const Fbo* pTargetFbo); //GraphicsVars
     void setPhotonTracingCommonVariable(PhotonTraceShader& shader);
-    PhotonTraceShader getPhotonTraceShader();
+
     void loadSceneSetting(std::string path);
     void saveSceneSetting(std::string path);
+
     void createCausticsMap();
     void createGBuffer(int width, int height, GBuffer& gbuffer);
+
     int2 getTileDim() const;
     float resolutionFactor();
-    uint photonMacroToFlags();
+    uint photonMacroToFlags() const;
 };
