@@ -26,19 +26,17 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 
+import Scene.Scene;
 import Scene.Raytracing;
 import Scene.Raster;
+import Scene.Material.MaterialSystem;
 import Rendering.Lights.LightHelpers;
 import Utils.Math.MathHelpers;
 import Utils.Sampling.TinyUniformSampleGenerator;
 
-//import Rendering.RenderPasses.NRDHelpers;
-//__import Raytracing;
-//__import Helpers;
-
 RWTexture2D<float4> gOutput;
 
-/*shared*/ cbuffer PerFrameCB
+cbuffer PerFrameCB
 {
     float4x4 invView;
     float2 viewportDims;
@@ -133,16 +131,16 @@ void primaryClosestHit(inout PrimaryRayData hitData, in BuiltInTriangleIntersect
     VertexData v = getVertexData(instanceID, triangleIndex, attribs);
     const uint materialID = gScene.getMaterialID(instanceID);
     let lod = ExplicitLodTextureSampler(0.0f);
-    ShadingData sd = gScene.materials.prepareShadingData(v, materialID, rayOrigW/*, lod*/);
+    ShadingData sd = gScene.materials.prepareShadingData(v, materialID, rayOrigW /*viewDir should be*/);
 
     // Shoot a reflection ray
     float3 reflectColor = 0.0f.rrr; // getReflectionColor(posW, v, rayDirW, hitData.depth.r);
     float3 color = 0.0f.rrr;
 
     //let bsdf = gScene.materials.getBSDF(sd, lod);
-    //let bsdf = gScene.materials.getBasicMaterialData(materialID);
-    let mi = gScene.materials.getMaterialInstance(sd, lod);
-    let bsdf = mi.getBSDF(sd);
+    uint hints = 0u;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+    BSDFProperties bsdfProperties = mi.getProperties(sd);
     
     uint3 launchIndex = DispatchRaysIndex();
     TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(launchIndex.xy, sampleIndex);
@@ -155,7 +153,7 @@ void primaryClosestHit(inout PrimaryRayData hitData, in BuiltInTriangleIntersect
             if (checkLightHit(i, posW) == false)
             {
                 //color += evalMaterial(sd, gScene.getLight(i), 1).color.xyz;
-                color += bsdf.eval(sd, ls.dir, sg) * ls.Li;
+                color += mi.eval(sd, ls.dir, sg) * ls.Li;
             }
         }
     }
@@ -163,11 +161,10 @@ void primaryClosestHit(inout PrimaryRayData hitData, in BuiltInTriangleIntersect
     hitData.color.rgb = color;
     hitData.hitT = hitT;
     // A very non-PBR inaccurate way to do reflections
-    BSDFProperties bsdfProps = bsdf.getProperties(sd);
-    float oriRoughness = bsdfProps.roughness;
+    float oriRoughness = bsdfProperties.roughness;
     float roughness = min(0.5f, max(1e-8, oriRoughness));
-    hitData.color.rgb += bsdfProps.specularReflectionAlbedo * reflectColor * (roughness * roughness);
-    hitData.color.rgb += bsdfProps.emission;
+    hitData.color.rgb += bsdfProperties.specularReflectionAlbedo * reflectColor * (roughness * roughness);
+    hitData.color.rgb += bsdfProperties.emission;
     //hitData.color.rgb = sd.N;
     hitData.color.a = 1.0f;
 }

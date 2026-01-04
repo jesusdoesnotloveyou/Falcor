@@ -27,7 +27,6 @@
 ***************************************************************************/
 #include "Common.hlsl"
 
-shared
 cbuffer PerFrameCB
 {
     float4x4 viewProjMat;

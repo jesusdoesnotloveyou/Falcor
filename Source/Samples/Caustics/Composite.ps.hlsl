@@ -25,11 +25,13 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
-//__import ShaderCommon;
-//__import Shading;
-//__import DefaultVS;
 
 import Scene.Raster;
+//import Scene.Shading;
+//import Scene.ShadingData;
+//import Scene.Lights.LightData;
+import Utils.Sampling.TinyUniformSampleGenerator;
+import Rendering.Lights.LightHelpers;
 
 #include "Common.hlsl"
 
@@ -48,28 +50,28 @@ StructuredBuffer<uint4> gRayCountQuadTree;
 StructuredBuffer<PixelInfo> gPixelInfo;
 
 // Debug modes
-#define ShowDepth       1
-#define ShowNormal      2
-#define ShowDiffuse     3
-#define ShowSpecular    4
-#define ShowPhoton      5
-#define ShowWorld       6
-#define ShowRoughness   7
-#define ShowRayTex      8
-#define ShowRayTracing  9
-#define ShowAvgScreenArea 10
+#define ShowDepth                  1
+#define ShowNormal                 2
+#define ShowDiffuse                3
+#define ShowSpecular               4
+#define ShowPhoton                 5
+#define ShowWorld                  6
+#define ShowRoughness              7
+#define ShowRayTex                 8
+#define ShowRayTracing             9
+#define ShowAvgScreenArea         10
 #define ShowAvgScreenAreaVariance 11
-#define ShowCount 12
-#define ShowTotalPhoton 13
-#define ShowRayCountMipTex 14
-#define ShowPhotonDensity 15
-#define ShowSmallPhotonTex 16
-#define ShowSmallPhotonCount 17
+#define ShowCount                 12
+#define ShowTotalPhoton           13
+#define ShowRayCountMipTex        14
+#define ShowPhotonDensity         15
+#define ShowSmallPhotonTex        16
+#define ShowSmallPhotonCount      17
 
 cbuffer PerImageCB
 {
     // Lighting params
-    LightData gLightData[16];
+    LightData gLightData[16]; //Scene.Lights.LightData, inside LightHelpers
     float4x4 gInvWvpMat;
     float4x4 gInvPMat;
 
@@ -94,10 +96,11 @@ VSOut vsMain(VSIn vIn)
     return defaultVS(vIn);
 }
 
-float4 psMain(VSOut vsOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
+float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
+    // Or vsOut.texC
     float depth = gDepthTex.Sample(gPointSampler, texC).r;
-    float4 screenPnt = float4(texC * float2(2, -2) + float2(-1, 1), depth, 1);
+    float4 screenPnt = float4(texC * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), depth, 1.0f);
     float4 worldPnt = mul(screenPnt, gInvWvpMat);
     worldPnt /= worldPnt.w;
     float4 normalVal = gNormalTex.Sample(gPointSampler, texC);

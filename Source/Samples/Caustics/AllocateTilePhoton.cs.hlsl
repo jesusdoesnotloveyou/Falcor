@@ -26,11 +26,10 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 
-__import ShaderCommon;
+//import ShaderCommon;
 
 #include "Common.hlsl"
 
-shared
 cbuffer PerFrameCB
 {
     float4x4 gViewProjMat;

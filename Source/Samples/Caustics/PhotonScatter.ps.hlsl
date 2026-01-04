@@ -78,10 +78,11 @@ cbuffer PerFrameCB : register(b0)
     float gZTolerance;
     int gResRatio;
 };
-#define AnisotropicPhoton 0
-#define IsotropicPhoton 1
-#define PhotonMesh 2
-#define ScreenDot 3
+
+#define AnisotropicPhoton  0
+#define IsotropicPhoton    1
+#define PhotonMesh         2
+#define ScreenDot          3
 #define ScreenDotWithColor 4
 
 #define SHOW_PHOTON_KERNEL 0
@@ -214,8 +215,8 @@ void GetVertexPosInfo(Photon p00, Photon p01, Photon p10, Photon p11, int mask, 
 
 bool meshScatter(int instanceID, float2 vertex, out float4 posH, out float3 color)
 {
-    color = 0;
-    posH = float4(100, 100, 100, 1);
+    color = 0.0f.rrr;
+    posH = float4(100.0f, 100.0f, 100.0f, 1.0f);
     Photon p00, p01, p10, p11;
     int mask = 0;
     if (!GetPhotons(instanceID, vertex, p00, p01, p10, p11, mask))
@@ -223,7 +224,7 @@ bool meshScatter(int instanceID, float2 vertex, out float4 posH, out float3 colo
 
     float3 posW;
     GetVertexPosInfo(p00, p01, p10, p11, mask, posW, color);
-    posH = mul(float4(posW, 1), gWvpMat);
+    posH = mul(float4(posW, 1.0f), gWvpMat);
     return true;
 }
 
@@ -323,7 +324,7 @@ PhotonVSOut photonScatterVS(PhotonVSIn vIn)
     if (gShowPhoton == SHOW_PHOTON_SHADED)
     {
         float3 surfNormal = normalize(tangent * vIn.normal.x + bitangent * vIn.normal.z + normal * vIn.normal.y * gSplatSize);
-        vOut.color = float4(abs(dot(float3(1, 1, 1), surfNormal)), 1);
+        vOut.color = float4(abs(dot(float3(1.0f, 1.0f, 1.0f), surfNormal)).rrr, 1.0f); // .rrr?
     }
     else
         vOut.color = float4(color, 1);
@@ -344,7 +345,7 @@ float4 photonScatterPS(PhotonVSOut vOut) : SV_TARGET
     float pixelZ = -vOut.posH.w; // toViewSpace(vOut.posH.z, vOut.posH.w);
     if (gShowPhoton == SHOW_PHOTON_SHADED)
     {
-        return float4(1, 1, 0, 1) * vOut.color;
+        return float4(1.0f, 1.0f, 0.0f, 1.0f) * vOut.color;
     }
 
     float zDiff = pixelZ - depth;
@@ -366,5 +367,5 @@ float4 photonScatterPS(PhotonVSOut vOut) : SV_TARGET
         //alpha = sinc(vOut.texcoord.x, c)* sinc(vOut.texcoord.y, c);
         alpha = pow(alpha, gKernelPower);
     }
-    return float4(vOut.color.rgb * alpha, 1);
+    return float4(vOut.color.rgb * alpha, 1.0f);
 }

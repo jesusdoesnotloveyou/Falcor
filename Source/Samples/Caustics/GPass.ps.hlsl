@@ -51,19 +51,23 @@ GPassPsOut gpassPS(VSOut vOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
     let lod = ImplicitLodTextureSampler();
     float3 viewDir = normalize(gScene.camera.getPosition() - vOut.posW);
-    ShadingData sd = prepareShadingData(vOut, triangleIndex, viewDir, lod);
+    ShadingData sd = prepareShadingData(vOut, triangleIndex, viewDir/*, lod*/);
     //ShadingData sd = prepareShadingData(vOut, gMaterial, gCamera.posW);
 
+    uint hints = 0u;
     // Create BSDF instance and query its properties.
-    let bsdf = gScene.materials.getBSDF(sd, lod);
-    let bsdfProperties = bsdf.getProperties(sd);
+    //let bsdf = gScene.materials.getBSDF(sd, lod);
+    //let bsdfProperties = bsdf.getProperties(sd);
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+    BSDFProperties bsdfProperties = mi.getProperties(sd);
 
     if (sd.opacity < 1)
     {
         discard;
     }
+    
     GPassPsOut output;
-    output.normal = float4(normalize(vOut.normalW.xyz), 1);
+    output.normal = float4(normalize(vOut.normalW.xyz), 1.0f);
     output.diffuse = float4(bsdfProperties.diffuseReflectionAlbedo, bsdfProperties.roughness);
     output.specular = float4(bsdfProperties.specularReflectionAlbedo, /*sd.opacity*/0.5f);
     return output;
