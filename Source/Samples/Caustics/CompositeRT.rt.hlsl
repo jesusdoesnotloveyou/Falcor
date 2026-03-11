@@ -26,16 +26,21 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 #include "Common.hlsl"
+
 RWTexture2D<float4> gOutput;
 Texture2D<float4> gCausticsTex;
 Texture2D gDepthTex;
 Texture2D gNormalTex;
 SamplerState gLinearSampler;
 SamplerState gPointSampler;
-__import Raytracing;
-import Helpers;
 
-/*shared*/ cbuffer PerFrameCB
+import Scene.Scene;
+import Scene.Raytracing;
+import Scene.Material.MaterialSystem;
+import Utils.Sampling.TinyUniformSampleGenerator;
+import Rendering.Lights.LightHelpers;
+
+cbuffer PerFrameCB
 {
     float4x4 invView;
     float4x4 invProj;
@@ -80,9 +85,9 @@ void shadowAnyHit(inout ShadowRayData hitData, in BuiltInTriangleIntersectionAtt
 [shader("miss")]
 void primaryMiss(inout HitData hitData)
 {
-    hitData.color = 0; // float4(0.38f, 0.52f, 0.10f, 1);
-    hitData.hitT = -1;
-    hitData.throughput = 0;
+    hitData.color = 0.0f.xxx; // float4(0.38f, 0.52f, 0.10f, 1);
+    hitData.hitT = -1.0f;
+    hitData.throughput = 0.0f.xxx;
 }
 
 bool checkLightHit(uint lightIndex, float3 origin)
@@ -96,7 +101,7 @@ bool checkLightHit(uint lightIndex, float3 origin)
 
     ShadowRayData rayData;
     rayData.hit = true;
-    TraceRay(gRtScene, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 1 /* ray index */, hitProgramCount, 1, ray, rayData);
+    TraceRay(gScene.rtAccel, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 1 /* ray index */, rayTypeCount, 1, ray, rayData);
     return rayData.hit;
 }
 
@@ -119,7 +124,7 @@ float getWeight(float2 offset, float3 normal0, float3 normal1, float z0, float z
     float zDiff = gZKernel * abs(z0 - z1); // (length(dPos));
     float uvDiff = gPosKernel * length(offset);
     //float x = zDiff * normalDiff * uvDiff * gPosKernel;// *zDiff * 1;
-    return exp(-1 * (zDiff * zDiff + normalDiff * normalDiff + uvDiff * uvDiff));
+    return exp(-1.0f * (zDiff * zDiff + normalDiff * normalDiff + uvDiff * uvDiff));
 }
 
 [shader("closesthit")]
@@ -132,13 +137,24 @@ void primaryClosestHit(inout HitData hitData, in BuiltInTriangleIntersectionAttr
     
     // prepare the shading data
     float3 posW = rayOrigW + hitT * rayDirW;
-    VSOut v = getVertexAttributes(triangleIndex, attribs);
-    ShadingData sd = prepareShadingData(v, gMaterial, rayOrigW, 0);
+    
+    const GeometryInstanceID instanceID = getGeometryInstanceID();
+    //VSOut v = getVertexAttributes(triangleIndex, attribs);
+    VertexData v = getVertexData(instanceID, triangleIndex, attribs);
 
-    float3 color = 0;
-    if (sd.linearRoughness > roughThreshold || sd.opacity < 1)
+    const uint materialID = gScene.getMaterialID(instanceID);
+    let lod = ExplicitLodTextureSampler(0.f);
+    ShadingData sd = gScene.materials.prepareShadingData(v, materialID, -rayDirW /*rayOrigW*/ /*, lod*/);
+
+    float3 color = 0.0f.rrr;
+    uint hints = 0u;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+    BSDFProperties bsdfProperties = mi.getProperties(sd);
+    
+    if (bsdfProperties.roughness > roughThreshold || /*sd.opacity < 1*/bsdfProperties.isTransmissive)
     {
-        bool isReflect = (sd.opacity == 1);
+        //bool isReflect = (sd.opacity == 1);
+        bool isReflect = !bsdfProperties.isTransmissive;
         float3 R;
         float eta = iorOverride > 0 ? 1.0 / iorOverride : 1.0 / sd.IoR;
         float3 N = v.normalW;
@@ -161,14 +177,15 @@ void primaryClosestHit(inout HitData hitData, in BuiltInTriangleIntersectionAttr
             getRefractVector(rayDirW, N, R, eta);
         }
 
-        float3 baseColor = lerp(1, sd.diffuse, sd.opacity);
-        color = 0;
+        //float3 baseColor = lerp(1, sd.diffuse, sd.opacity);
+        float3 baseColor = bsdfProperties.diffuseReflectionAlbedo;
+        color = 0.0f.rrr;
         hitData.nextDir = R;
         hitData.throughput = baseColor;
     }
     else
     {
-        float4 posS = mul(float4(posW, 1), gCamera.viewProjMat);
+        float4 posS = mul(float4(posW, 1.0f), gScene.camera./*data.viewProjMat*/getViewProj());
         posS /= posS.w;
         if (all(posS.xy < 1))
         {
@@ -178,15 +195,15 @@ void primaryClosestHit(inout HitData hitData, in BuiltInTriangleIntersectionAttr
             float z0;
             getSample(gLinearSampler, texCoord, clr0, nor0, z0);
 
-            float totalWeight = 1;
+            float totalWeight = 1.0f;
             float3 causticsClr = clr0;
-            if (gPosKernel > 0 || gZKernel > 0 || gNormalKernel > 0)
+            if (gPosKernel > 0.0f || gZKernel > 0.0f || gNormalKernel > 0.0f)
             {
                 float2 dir[] =
                 {
-                    float2(-1, -1), float2(-1, 0), float2(-1, 1),
-                    float2(0, -1), float2(0, 1),
-                    float2(1, -1), float2(1, 0), float2(1, 1),
+                    float2(-1.0f, -1.0f), float2(-1.0f, 0.0f), float2(-1.0f, 1.0f),
+                    float2(0.0f,  -1.0f), float2( 0.0f, 1.0f),
+                    float2(1.0f,  -1.0f), float2( 1.0f, 0.0f), float2( 1.0f, 1.0f),
                 };
                 [unroll]
                 for (int i = 0; i < 8; i++)
@@ -203,56 +220,65 @@ void primaryClosestHit(inout HitData hitData, in BuiltInTriangleIntersectionAttr
             }
             causticsClr /= totalWeight;
 
-            color += sd.diffuse * causticsClr; // gCausticsTex.SampleLevel(gLinearSampler, texCoord, 0).rgb;
+            color += /*sd.diffuse*/bsdfProperties.diffuseReflectionAlbedo * causticsClr; // gCausticsTex.SampleLevel(gLinearSampler, texCoord, 0).rgb;
         }
-        [unroll]
-        for (int i = 0; i < gLightsCount; i++)
+
+        uint3 launchIndex = DispatchRaysIndex();
+        TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(launchIndex.xy, sampleIndex);
+        //[unroll]
+        [loop]
+        for (int i = 0; i < gScene.getLightCount(); i++)
         {
-            if (checkLightHit(i, posW) == false)
+            AnalyticLightSample ls;
+            if (evalLightApproximate(sd.posW, gScene.getLight(i), ls))
             {
-                color += evalMaterial(sd, gLights[i], 1).color.xyz;
+                if (checkLightHit(i, posW) == false)
+                {
+                    color += mi.eval(sd, ls.dir, sg) * ls.Li; // .color.xyz;
+                }
             }
         }
 
-        hitData.throughput = 0;
+        hitData.throughput = 0.0f.xxx;
     }
 
     hitData.color.rgb = color;
     hitData.hitT = hitT;
-    hitData.color.rgb += sd.emissive;
+    hitData.color.rgb += bsdfProperties.emission;/*sd.emissive;*/
 }
 
 [shader("raygeneration")]
 void rayGen()
 {
     uint3 launchIndex = DispatchRaysIndex();
-    uint randSeed = rand_init(launchIndex.x + launchIndex.y * viewportDims.x, sampleIndex, 16);
+    TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(launchIndex.xy, sampleIndex);
 
     RayDesc ray;
     if (!useDOF)
     {
-        ray = generateRay(gCamera, launchIndex.xy, viewportDims);
+        ray = gScene.camera.computeRayPinhole(launchIndex.xy, viewportDims).toRayDesc();
     }
     else
     {
-        ray = generateDOFRay(gCamera, launchIndex.xy, viewportDims, randSeed);
+        float2 u = sampleNext2D(sg);
+        ray = gScene.camera.computeRayThinlens(launchIndex.xy, viewportDims, u).toRayDesc();
     }
 
-    float3 totalColor = 0;
-    float3 totalThroughput = 1;
+    float3 totalColor = 0.0f.rrr;
+    float3 totalThroughput = 1.0f.rrr;
     for (int i = 0; i < maxDepth && any(totalThroughput > 0); i++)
     {
         HitData hitData;
-        TraceRay(gRtScene, 0, 0xFF, 0, hitProgramCount, 0, ray, hitData);
+        TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index*/, rayTypeCount, 0, ray, hitData);
 
         totalColor += totalThroughput * hitData.color.rgb;
         totalThroughput *= hitData.throughput;
 
         ray.Origin = ray.Origin + ray.Direction * hitData.hitT;
         ray.Direction = hitData.nextDir;
-        ray.TMin = 0.001;
-        ray.TMax = 100000;
+        ray.TMin = 0.001f;
+        ray.TMax = 100000.0f;
     }
 
-    gOutput[launchIndex.xy] = float4(totalColor, 1);
+    gOutput[launchIndex.xy] = float4(totalColor, 1.0f);
 }

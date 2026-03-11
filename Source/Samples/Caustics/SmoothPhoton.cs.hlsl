@@ -27,7 +27,7 @@
 ***************************************************************************/
 #include "Common.hlsl"
 
-shared cbuffer PerFrameCB
+cbuffer PerFrameCB
 {
     float4x4 viewProjMat;
 
@@ -47,14 +47,14 @@ shared cbuffer PerFrameCB
     int minNeighbourCount;
 };
 
-struct DrawArguments
-{
-    uint indexCountPerInstance;
-    uint instanceCount;
-    uint startIndexLocation;
-    int baseVertexLocation;
-    uint startInstanceLocation;
-};
+//struct DrawArguments
+//{
+//    uint IndexCountPerInstance;
+//    uint InstanceCount;
+//    uint StartIndexLocation;
+//    int BaseVertexLocation;
+//    uint StartInstanceLocation;
+//};
 
 StructuredBuffer<Photon> gSrcPhotonBuffer;
 RWStructuredBuffer<Photon> gDstPhotonBuffer;

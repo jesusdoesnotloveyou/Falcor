@@ -26,11 +26,10 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
 
-__import ShaderCommon;
+//import ShaderCommon;
 
 #include "Common.hlsl"
 
-shared
 cbuffer PerFrameCB
 {
     float4x4 gViewProjMat;
@@ -83,8 +82,8 @@ void GetPhotonScreenRange(Photon photon, out int2 minTileID, out int2 maxTileID)
     py1.y *= -1;
 
     // get range
-    float3 minCoord = 10000;
-    float3 maxCoord = -10000;
+    float3 minCoord = 10000.0f;
+    float3 maxCoord = -10000.0f;
     minCoord = min(minCoord, px0.xyz);
     minCoord = min(minCoord, px1.xyz);
     minCoord = min(minCoord, py0.xyz);
@@ -131,8 +130,8 @@ bool orthogonalizeFrame(float3 a, float3 b, out float3 orthoA, out float3 orthoB
         float diff = a11 - a22;
         float delta = sqrt(diff * diff + 4 * a12 * a12);
 
-        float lambda1 = (sum + delta) * 0.5;
-        float lambda2 = (sum - delta) * 0.5;
+        float lambda1 = (sum + delta) * 0.5f;
+        float lambda2 = (sum - delta) * 0.5f;
 
         float2 p1 = normalize(float2(a12, lambda1 - a11));
         float2 p2 = normalize(float2(a12, lambda2 - a11));
@@ -176,7 +175,7 @@ bool orthogonalizeFrame(float3 a, float3 b, out float3 orthoA, out float3 orthoB
 void OrthogonalizePhoton(uint3 threadIdx : SV_DispatchThreadID)
 {
     int photonID = threadIDToPhotonID(threadIdx);
-    if (photonID >= gDrawArgument[0].instanceCount)
+    if (photonID >= gDrawArgument[0].InstanceCount)
     {
         return;
     }
@@ -196,7 +195,7 @@ void OrthogonalizePhoton(uint3 threadIdx : SV_DispatchThreadID)
 void CountTilePhoton(uint3 threadIdx : SV_DispatchThreadID)
 {
     int photonID = threadIDToPhotonID(threadIdx);
-    if (photonID >= gDrawArgument[0].instanceCount)
+    if (photonID >= gDrawArgument[0].InstanceCount)
     {
         return;
     }
@@ -245,7 +244,7 @@ void AllocateMemory(uint3 threadIdx : SV_DispatchThreadID)
 void StoreTilePhoton(uint3 threadIdx : SV_DispatchThreadID)
 {
     int photonID = threadIDToPhotonID(threadIdx);
-    if (photonID >= gDrawArgument[0].instanceCount)
+    if (photonID >= gDrawArgument[0].InstanceCount)
     {
         return;
     }

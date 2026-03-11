@@ -36,6 +36,35 @@ struct IDBlock
     int count;
 };
 
+//struct DrawArguments
+//{
+//    int VertexCountPerInstance;
+//    int InstanceCount;
+//    int StartVertexLocation;
+//    int StartInstanceLocation;
+//};
+
+struct DrawArguments
+{
+    uint IndexCountPerInstance;
+    uint InstanceCount;
+    uint StartIndexLocation;
+    int BaseVertexLocation;
+    uint StartInstanceLocation;
+};
+
+// на всякий, но вообще я юзаю VSOut из Scene.Raster
+struct VertexOut
+{
+    float2 texC;
+    float3 normalW;
+    float3 bitangentW;
+    float3 posW;
+    float3 colorV;
+    float3 prevPosH;
+    //float3 lightmapC = 0;
+};
+
 void getRefractVector(float3 I, float3 N, out float3 R, float eta)
 {
     float IN = dot(I, N);
@@ -141,7 +170,7 @@ int getTextureOffset4(int2 pos, int mip)
 
 float getLuminance(float3 color)
 {
-    return dot(color, float3(0.299, 0.587, 0.114));
+    return dot(color, float3(0.299f, 0.587f, 0.114f));
 }
 
 uint compressColor(float3 color, float scale)

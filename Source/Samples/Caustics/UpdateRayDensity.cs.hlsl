@@ -27,7 +27,7 @@
 ***************************************************************************/
 #include "Common.hlsl"
 
-/*shared*/ cbuffer PerFrameCB
+cbuffer PerFrameCB
 {
     int2 coarseDim;
     float minPhotonPixelSize;
@@ -45,8 +45,8 @@ RWTexture2D<float4> gRayDensityTex;
 void getAreaValue(uint2 pos, out float avgArea, out float avgArea2)
 {
     int idx = coarseDim.x * pos.y + pos.x;
-    avgArea = (gPixelInfo[idx].screenArea / float(gPixelInfo[idx].count + 0.01));
-    avgArea2 = (gPixelInfo[idx].screenAreaSq / float(gPixelInfo[idx].count + 0.01));
+    avgArea = (gPixelInfo[idx].screenArea / float(gPixelInfo[idx].count + 0.01f));
+    avgArea2 = (gPixelInfo[idx].screenAreaSq / float(gPixelInfo[idx].count + 0.01f));
 }
 
 [numthreads(16, 16, 1)]

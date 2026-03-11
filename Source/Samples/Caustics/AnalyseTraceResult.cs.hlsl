@@ -27,7 +27,6 @@
 ***************************************************************************/
 #include "Common.hlsl"
 
-shared
 cbuffer PerFrameCB
 {
     float4x4 viewProjMat;
@@ -42,14 +41,14 @@ cbuffer PerFrameCB
     uint samplePlacement;
 };
 
-struct DrawArguments
-{
-    uint indexCountPerInstance;
-    uint instanceCount;
-    uint startIndexLocation;
-    int baseVertexLocation;
-    uint startInstanceLocation;
-};
+//struct DrawArguments
+//{
+//    uint IndexCountPerInstance;
+//    uint InstanceCount;
+//    uint StartIndexLocation;
+//    int BaseVertexLocation;
+//    uint StartInstanceLocation;
+//};
 
 RWStructuredBuffer<Photon> gPhotonBuffer;
 //RWStructuredBuffer<DrawArguments> gDrawArgument;
@@ -136,5 +135,4 @@ void addPhotonTaskFromTexture(uint3 groupID : SV_GroupID, uint groupIndex : SV_G
             gRayTask[taskIdx + i] = newTask;
         }
     }
-
 }
