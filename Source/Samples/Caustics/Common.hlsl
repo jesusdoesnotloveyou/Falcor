@@ -36,12 +36,21 @@ struct IDBlock
     int count;
 };
 
+//struct DrawArguments
+//{
+//    int VertexCountPerInstance;
+//    int InstanceCount;
+//    int StartVertexLocation;
+//    int StartInstanceLocation;
+//};
+
 struct DrawArguments
 {
-    int VertexCountPerInstance;
-    int InstanceCount;
-    int StartVertexLocation;
-    int StartInstanceLocation;
+    uint IndexCountPerInstance;
+    uint InstanceCount;
+    uint StartIndexLocation;
+    int BaseVertexLocation;
+    uint StartInstanceLocation;
 };
 
 // на всякий, но вообще я юзаю VSOut из Scene.Raster

@@ -5,15 +5,15 @@ target_sources(Caustics PRIVATE
     	Caustics.h
     	AllocateTilePhoton.cs.hlsl
     	AnalyseTraceResult.cs.hlsl
-    	Caustics.ps.hlsl
-    	Caustics.rt.hlsl
+    	CausticsRaster.ps.hlsl
+    	CausticsRT.rt.hlsl
     	Common.hlsl
-    	Composite.ps.hlsl
+    	CompositeRaster.ps.hlsl
     	CompositeRT.rt.hlsl
     	GenerateRayCountMipmap.cs.hlsl
-    	GPass.ps.hlsl
+    	GBufferRaster.ps.hlsl
     	PhotonGather.cs.hlsl
-	    PhotonScatter.ps.hlsl
+	    PhotonScatter.3d.hlsl
 	    PhotonTrace.rt.hlsl
 	    ResetDrawArgument.cs.hlsl
 	    SmoothPhoton.cs.hlsl

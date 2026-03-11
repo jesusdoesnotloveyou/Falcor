@@ -27,9 +27,7 @@
 ***************************************************************************/
 
 import Scene.Raster;
-//import Scene.Shading;
-//import Scene.ShadingData;
-//import Scene.Lights.LightData;
+import Scene.Lights.LightData;
 import Utils.Sampling.TinyUniformSampleGenerator;
 import Rendering.Lights.LightHelpers;
 
@@ -91,16 +89,16 @@ cbuffer PerImageCB
     float gSmallPhotonColorScale;
 };
 
-VSOut vsMain(VSIn vIn)
-{
-    return defaultVS(vIn);
-}
+//VSOut vsMain(VSIn vIn)
+//{
+//    return defaultVS(vIn);
+//}
 
 float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
     // Or vsOut.texC
     float depth = gDepthTex.Sample(gPointSampler, texC).r;
-    float4 screenPnt = float4(texC * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), depth, 1.0f);
+    float4 screenPnt = float4(texC * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), depth, 1.0f); // NDC space i am not mistaken
     float4 worldPnt = mul(screenPnt, gInvWvpMat);
     worldPnt /= worldPnt.w;
     float4 normalVal = gNormalTex.Sample(gPointSampler, texC);
@@ -114,16 +112,18 @@ float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_Pr
         float4 viewPnt = mul(screenPnt, gInvPMat);
         viewPnt /= viewPnt.w;
         float viewDepth = (gInvPMat[2][2] * depth + gInvPMat[3][2]) / (gInvPMat[2][3] * depth + gInvPMat[3][3]);
-        color = float4(abs(viewDepth.xxx) * 0.01, 1);
+        color = float4(abs(viewDepth.xxx) * 0.01f, 1.0f);
     }
     else if (gDebugMode == ShowNormal)
         color = normalVal;
     else if (gDebugMode == ShowDiffuse)
-        color = gDiffuseTex.Sample(gPointSampler, texC);
+        //color = gDiffuseTex.Sample(gPointSampler, texC);
+        color = diffuseVal;
     else if (gDebugMode == ShowSpecular)
-        color = gSpecularTex.Sample(gPointSampler, texC);
+        //color = gSpecularTex.Sample(gPointSampler, texC);
+        color = specularVal;
     else if (gDebugMode == ShowWorld)
-        color = frac(worldPnt * 0.01 + 0.01);
+        color = frac(worldPnt * 0.01f + 0.01f);
     else if (gDebugMode == ShowRoughness)
         color = diffuseVal.a;
     else if (gDebugMode == ShowRayTex)
@@ -136,9 +136,9 @@ float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_Pr
         //color /= color.w;
         //color.r /= gMaxPixelArea;
         if (v.r <= gMaxPixelArea)
-            color = float4(v.rgb / gMaxPixelArea, 1);
+            color = float4(v.rgb / gMaxPixelArea, 1.0f);
         else
-            color = float4(1, 0, 1, 1);
+            color = float4(1.0f, 0.0f, 1.0f, 1.0f);
     }
     else if (gDebugMode == ShowRayCountMipTex)
     {
@@ -150,9 +150,9 @@ float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_Pr
             uint4 v = gRayCountQuadTree[offset]; // .Load(int3(texelPos, gRayCountMip));
             uint sum = v.a;
             if (sum <= gMaxPixelArea)
-                color = float4(sum / gMaxPixelArea, 1);
+                color = float4((sum / gMaxPixelArea).xxx, 1.0f);
             else
-                color = float4(1, 0, 1, 1);
+                color = float4(1.0f, 0.0f, 1.0f, 1.0f);
         }
     }
     else if (gDebugMode == ShowRayTracing)
@@ -166,9 +166,9 @@ float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_Pr
         if (all(texelPos < dispatchSize))
         {
             PixelInfo info = gPixelInfo[texelPos.y * dispatchSize.x + texelPos.x];
-            float value = 0;
-            float avgArea = float(info.screenArea) / float(info.count + 0.001);
-            float avgAreaSq = float(info.screenAreaSq) / float(info.count + 0.001);
+            float value = 0.0f;
+            float avgArea = float(info.screenArea) / float(info.count + 0.001f);
+            float avgAreaSq = float(info.screenAreaSq) / float(info.count + 0.001f);
             if (gDebugMode == ShowAvgScreenArea)
             {
                 value = avgArea;
@@ -183,33 +183,33 @@ float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_Pr
             }
             float maxVal = gMaxPixelArea;
             if (value <= maxVal)
-                color = float4(value.xxx / maxVal, 1);
+                color = float4(value.xxx / maxVal, 1.0f);
             else
-                color = float4(1, 0, 1, 1);
+                color = float4(1.0f, 0.0f, 1.0f, 1.0f);
         }
     }
     else if (gDebugMode == ShowTotalPhoton)
     {
-        texC.y = 1 - texC.y;
+        texC.y = 1.0f - texC.y;
         int2 screenPixel = texC * screenDim;
         int texelPos = (gStatisticsOffset - screenPixel.x + screenDim.x) % screenDim.x;
         uint valueI = gStatisticsTex[texelPos].r;
         valueI = valueI * screenDim.y / gMaxPhotonCount;
         uint segmentWidth = screenDim.y / 4;
         float4 graphColor;
-        float alpha = 0.3;
+        float alpha = 0.3f;
         if (screenPixel.y % segmentWidth == 0)
-            graphColor = float4(0.2, 0.2, 0.2, alpha);
+            graphColor = float4(0.2f, 0.2f, 0.2f, alpha);
         else if (screenPixel.y <= valueI)
-            graphColor = float4(1, 0, 0, alpha);
+            graphColor = float4(1.0f, 0.0f, 0.0f, alpha);
         else
-            graphColor = float4(0, 0, 0, 0);
+            graphColor = float4(0.0f, 0.0f, 0.0f, 0.0f);
         color.rgb = lerp(rtColor.rgb, graphColor.rgb, graphColor.a);
-        color.a = 1;
+        color.a = 1.0f;
     }
     else if (gDebugMode == ShowSmallPhotonTex)
     {
-        texC.y = 1 - texC.y;
+        texC.y = 1.0f - texC.y;
         int2 screenPixel = texC * screenDim;
         uint v = gSmallPhotonTex.Load(int3(screenPixel.xy, 0));
         float4 photonClr = decompressColor(v, gSmallPhotonColorScale);
@@ -217,33 +217,45 @@ float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_Pr
     }
     else if (gDebugMode == ShowSmallPhotonCount)
     {
-        texC.y = 1 - texC.y;
+        texC.y = 1.0f - texC.y;
         int2 screenPixel = texC * screenDim;
         uint v = gSmallPhotonTex.Load(int3(screenPixel.xy, 0));
         float4 photonClr = decompressColor(v, gSmallPhotonColorScale);
         if (photonClr.a <= gMaxPixelArea)
             color = float4(photonClr.aaa / gMaxPixelArea, 1);
         else
-            color = float4(1, 0, 1, 1);
+            color = float4(1.0f, 0.0f, 1.0f, 1.0f);
         color.rgb += rtColor.rgb; // *0.5;
     }
     else
     {
-        ShadingData sd = initShadingData();
+        let lod = ImplicitLodTextureSampler();
+        ShadingData sd = { }; // initShadingData();
         sd.posW = worldPnt.xyz;
         sd.V = normalize(gCameraPos - sd.posW);
-        sd.N = normalVal.xyz;
-        sd.NdotV = saturate(dot(sd.V, sd.N));
-        sd.linearRoughness = diffuseVal.a;
-        sd.roughness = sd.linearRoughness * sd.linearRoughness;
-        sd.specular = specularVal.xyz;
-        sd.diffuse = diffuseVal.rgb;
-        sd.opacity = specularVal.a;
-        color = float4(0, 0, 0, 1);
-        for (uint l = 0; l < gNumLights; l++)
+        //sd.N = normalVal.xyz;
+        //sd.T = normalize(cross(sd.V, sd.N));
+        //sd.B = normalize(cross(sd.T, sd.N));
+        sd.uv = texC;
+        //sd.faceN = sd.N;
+        float4 tangentW = float4(1, 0, 0, 1);
+        bool valid;
+        sd.frame = ShadingFrame::createSafe(normalVal.xyz, tangentW, valid);
+        sd.faceN = sd.frame.N;
+        sd.frontFacing = dot(sd.V, sd.faceN) >= 0.0f;
+        //sd.NdotV = saturate(dot(sd.V, sd.N));
+        //sd.linearRoughness = diffuseVal.a;
+        //sd.roughness = sd.linearRoughness * sd.linearRoughness;
+        //sd.specular = specularVal.xyz;
+        //sd.diffuse = diffuseVal.rgb;
+        //sd.opacity = specularVal.a;
+        color = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        for (uint l = 0; l < gScene.getLightCount(); l++)
         {
-            ShadingResult sr = evalMaterial(sd, gLightData[l], 1);
-            color.rgb += sr.color.rgb;
+            const LightData light = gScene.getLight(l);
+            float3 L = normalize(light.posW - sd.posW);
+            //ShadingResult sr = evalMaterial(sd, gLightData[l], 1);
+            color.rgb += diffuseVal.rgb * saturate(dot(L, sd.faceN)); // sr.color.rgb;
         }
 
         float4 photonClr = gPhotonTex.Sample(gPointSampler, texC);
@@ -260,7 +272,7 @@ float4 psMain( /*VSOut vsOut*/float2 texC : TEXCOORD, uint triangleIndex : SV_Pr
         }
         else
         {
-            color.rgb += photonClr.rgb * sd.diffuse;
+            color.rgb += photonClr.rgb * diffuseVal.rgb; // sd.diffuse;
         }
     }
 

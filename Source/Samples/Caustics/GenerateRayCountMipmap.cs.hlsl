@@ -27,7 +27,6 @@
 ***************************************************************************/
 #include "Common.hlsl"
 
-shared
 cbuffer PerFrameCB
 {
     int2 taskDim;

@@ -90,7 +90,7 @@ bool checkLightHit(uint lightIndex, float3 origin)
     
     ShadowRayData rayData;
     rayData.hit = true;
-    TraceRay(gScene.rtAccel, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 1 /* ray index */, rayTypeCount /*hitProgramCount*/, 1, ray, rayData);
+    TraceRay(gScene.rtAccel, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xFF, 1 /* ray index */, rayTypeCount, 1, ray, rayData);
     return rayData.hit;
 }
 
@@ -100,13 +100,14 @@ float3 getReflectionColor(float3 worldOrigin, VSOut v, float3 worldRayDir, uint 
     if (hitDepth == 0)
     {
         PrimaryRayData secondaryRay;
-        secondaryRay.depth.r = 1;
+        secondaryRay.depth = 1;
+        
         RayDesc ray;
         ray.Origin = worldOrigin;
         ray.Direction = reflect(worldRayDir, v.normalW);
         ray.TMin = 0.001f;
         ray.TMax = 100000.0f;
-        TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index*/, rayTypeCount /*hitProgramCount*/, 0, ray, secondaryRay);
+        TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index*/, rayTypeCount, 0, ray, secondaryRay);
         reflectColor = secondaryRay.hitT == -1 ? 0 : secondaryRay.color.rgb;
         float falloff = max(1, (secondaryRay.hitT * secondaryRay.hitT));
         reflectColor *= 20 / falloff;
@@ -124,14 +125,13 @@ void primaryClosestHit(inout PrimaryRayData hitData, in BuiltInTriangleIntersect
     uint triangleIndex = PrimitiveIndex();
 
     float3 posW = rayOrigW + hitT * rayDirW;
+    
     // prepare the shading data
-    const GeometryInstanceID instanceID = getGeometryInstanceID();
-
-    //VSOut v = getVertexAttributes(triangleIndex, attribs);
+    GeometryInstanceID instanceID = getGeometryInstanceID();
     VertexData v = getVertexData(instanceID, triangleIndex, attribs);
     const uint materialID = gScene.getMaterialID(instanceID);
-    let lod = ExplicitLodTextureSampler(0.0f);
-    ShadingData sd = gScene.materials.prepareShadingData(v, materialID, rayOrigW /*viewDir should be*/);
+    let lod = ExplicitLodTextureSampler(0.f);
+    ShadingData sd = gScene.materials.prepareShadingData(v, materialID, rayOrigW/*, lod*/);
 
     // Shoot a reflection ray
     float3 reflectColor = 0.0f.rrr; // getReflectionColor(posW, v, rayDirW, hitData.depth.r);
@@ -144,8 +144,9 @@ void primaryClosestHit(inout PrimaryRayData hitData, in BuiltInTriangleIntersect
     
     uint3 launchIndex = DispatchRaysIndex();
     TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(launchIndex.xy, sampleIndex);
-    [unroll]
-    for (int i = 0; i < gScene.getLightCount(); i++)
+    //[unroll]
+    [loop]
+    for (uint i = 0; i < gScene.getLightCount(); i++)
     {
         AnalyticLightSample ls;
         if (evalLightApproximate(sd.posW, gScene.getLight(i), ls))
@@ -173,25 +174,20 @@ void primaryClosestHit(inout PrimaryRayData hitData, in BuiltInTriangleIntersect
 void rayGen()
 {
     uint3 launchIndex = DispatchRaysIndex();
-    //uint randSeed = rand_init(launchIndex.x + launchIndex.y * viewportDims.x, sampleIndex, 16);
-
     TinyUniformSampleGenerator sg = TinyUniformSampleGenerator(launchIndex.xy, sampleIndex);
     
     RayDesc ray;
     if (!useDOF)
     {
-        //ray = generateRay(gCamera, launchIndex.xy, viewportDims);
         ray = gScene.camera.computeRayPinhole(launchIndex.xy, viewportDims).toRayDesc();
     }
     else
     {
         float2 u = sampleNext2D(sg);
-        //ray = generateDOFRay(gCamera, launchIndex.xy, viewportDims, randSeed);
-        //ray = gScene.camera.computeRayPinhole(pixel, viewportDims, u).toRayDesc();
-        ray = gScene.camera.computeRayPinhole(launchIndex.xy, viewportDims, true).toRayDesc();
+        ray = gScene.camera.computeRayThinlens(launchIndex.xy, viewportDims, u).toRayDesc();
     }
     PrimaryRayData hitData;
     hitData.depth = 0;
-    TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index*/, rayTypeCount /*hitProgramCount*/, 0, ray, hitData);
+    TraceRay(gScene.rtAccel, 0 /*rayFlags*/, 0xFF, 0 /* ray index*/, rayTypeCount, 0, ray, hitData);
     gOutput[launchIndex.xy] = hitData.color;
 }

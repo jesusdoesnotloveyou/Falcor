@@ -29,6 +29,7 @@
 
 import Scene.Scene;
 import Scene.Raytracing;
+import Scene.Material.MaterialSystem;
 import Rendering.Lights.LightHelpers;
 
 RWStructuredBuffer<Photon> gPhotonBuffer;
@@ -44,7 +45,7 @@ Texture2D gUniformNoise;
 Texture2D gPhotonTexture;
 RWTexture2D<uint> gSmallPhotonBuffer;
 
-/*shared*/ cbuffer PerFrameCB
+cbuffer PerFrameCB
 {
     float4x4 invView;
 
@@ -229,10 +230,9 @@ void primaryMiss(inout CausticsPackedPayload hitData)
     hitData.hitT = 0.0f;
 }
 
-VertexOut getVertexAttributes(
-    const GeometryInstanceID instanceID,
-    uint triangleIndex, BuiltInTriangleIntersectionAttributes attribs,
-    out float3 dP1, out float3 dP2, out float3 dN1, out float3 dN2)
+VertexOut getVertexAttributes(const GeometryInstanceID instanceID, uint triangleIndex, BuiltInTriangleIntersectionAttributes attribs,
+    out float3 dP1, out float3 dP2,
+    out float3 dN1, out float3 dN2)
 {
     float3 barycentrics = float3(1.0 - attribs.barycentrics.x - attribs.barycentrics.y, attribs.barycentrics.x, attribs.barycentrics.y);
     uint3 indices = gScene.getIndices(instanceID, triangleIndex);
@@ -260,7 +260,7 @@ VertexOut getVertexAttributes(
 
         v.texC += svd.texCrd * barycentrics[i]; //asfloat(gTexCrds.Load2(address)) * barycentrics[i];
         v.normalW += N[i] * barycentrics[i];
-        v.bitangentW += asfloat(gBitangents.Load3(address)) * barycentrics[i];
+        //v.bitangentW += asfloat(gBitangents.Load3(address)) * barycentrics[i]; // there is no bitangent in StaticVertexData
         //v.lightmapC += asfloat(gLightMapUVs.Load2(address)) * barycentrics[i];
 
 #ifdef USE_INTERPOLATED_POSITION
@@ -290,9 +290,7 @@ VertexOut getVertexAttributes(
     return v;
 }
 
-void getVerticesAndNormals(
-    const GeometryInstanceID instanceID,
-    uint triangleIndex, BuiltInTriangleIntersectionAttributes attribs,
+void getVerticesAndNormals(const GeometryInstanceID instanceID, uint triangleIndex, BuiltInTriangleIntersectionAttributes attribs,
     out float3 P0, out float3 P1, out float3 P2,
     out float3 N0, out float3 N1, out float3 N2,
     out float3 N)
@@ -304,32 +302,29 @@ void getVerticesAndNormals(
     StaticVertexData svd = gScene.getVertex(indices[0]);
     //int address = (indices[0] * 3) * 4;
     P0 = svd.position; //asfloat(gPositions.Load3(address)).xyz;
-    P0 = mul(float4(P0, 1.f), worldMat).xyz;
+    P0 = mul(float4(P0, 1.0f), worldMat).xyz;
     N0 = svd.normal; //asfloat(gNormals.Load3(address)).xyz;
     N0 = normalize(mul(float4(N0, 0.f), worldMat).xyz);
 
     svd = gScene.getVertex(indices[1]);
     //address = (indices[1] * 3) * 4;
     P1 = svd.position; //asfloat(gPositions.Load3(address)).xyz;
-    P1 = mul(float4(P1, 1.f), worldMat).xyz;
+    P1 = mul(float4(P1, 1.0f), worldMat).xyz;
     N1 = svd.normal; //asfloat(gNormals.Load3(address)).xyz;
     N1 = normalize(mul(float4(N1, 0.f), worldMat).xyz);
 
     svd = gScene.getVertex(indices[2]);
     //address = (indices[2] * 3) * 4;
     P2 = svd.position; //asfloat(gPositions.Load3(address)).xyz;
-    P2 = mul(float4(P2, 1.f), worldMat).xyz;
+    P2 = mul(float4(P2, 1.0f), worldMat).xyz;
     N2 = svd.normal; //asfloat(gNormals.Load3(address)).xyz;
     N2 = normalize(mul(float4(N2, 0.f), worldMat).xyz);
 
-    float3 barycentrics = float3(1.0 - attribs.barycentrics.x - attribs.barycentrics.y, attribs.barycentrics.x, attribs.barycentrics.y);
+    float3 barycentrics = float3(1.0f - attribs.barycentrics.x - attribs.barycentrics.y, attribs.barycentrics.x, attribs.barycentrics.y);
     N = (N0 * barycentrics.x + N1 * barycentrics.y + N2 * barycentrics.z);
 }
 
-void updateTransferRayDifferential(
-    float3 N,
-    inout float3 dPdx,
-    float3 dDdx)
+void updateTransferRayDifferential(float3 N, inout float3 dPdx, float3 dDdx)
 {
     float3 D = WorldRayDirection();
     float t = RayTCurrent();
@@ -337,11 +332,7 @@ void updateTransferRayDifferential(
     dPdx = dPdx + t * dDdx + dtdx * D;
 }
 
-void calculateDNdx(
-    float3 dP1, float3 dP2,
-    float3 dN1, float3 dN2,
-    float3 N,
-    float3 dPdx, out float3 dNdx)
+void calculateDNdx(float3 dP1, float3 dP2, float3 dN1, float3 dN2, float3 N, float3 dPdx, out float3 dNdx)
 {
     float P11 = dot(dP1, dP1);
     float P12 = dot(dP1, dP2);
@@ -392,13 +383,14 @@ void getPhotonDifferential(CausticsUnpackedPayload hitData, RayDesc ray, out flo
 
 float getPhotonScreenArea(float3 posW, float3 dPdx, float3 dPdy, out float3 screenCoord, out bool inFrustum)
 {
+    const float4x4 viewProj = gScene.camera.getViewProj();
     dPdx = dPdx * gSplatSize;
     dPdy = dPdy * gSplatSize;
-    float4 s0 = mul(float4(posW, 1.0f), gScene.camera.getViewProj());
-    float4 s00 = mul(float4(posW + dPdx + dPdy, 1), gScene.camera.getViewProj());
-    float4 s01 = mul(float4(posW + dPdx - dPdy, 1), gScene.camera.getViewProj());
-    float4 s10 = mul(float4(posW - dPdx + dPdy, 1), gScene.camera.getViewProj());
-    float4 s11 = mul(float4(posW - dPdx - dPdy, 1), gScene.camera.getViewProj());
+    float4 s0 = mul(float4(posW, 1.0f), viewProj);
+    float4 s00 = mul(float4(posW + dPdx + dPdy, 1), viewProj);
+    float4 s01 = mul(float4(posW + dPdx - dPdy, 1), viewProj);
+    float4 s10 = mul(float4(posW - dPdx + dPdy, 1), viewProj);
+    float4 s11 = mul(float4(posW - dPdx - dPdy, 1), viewProj);
     inFrustum = isInFrustum(s00) || isInFrustum(s01) || isInFrustum(s10) || isInFrustum(s11);
     s0 /= s0.w;
     s00 /= s00.w;
@@ -412,7 +404,6 @@ float getPhotonScreenArea(float3 posW, float3 dPdx, float3 dPdy, out float3 scre
     //float area = 0.5 * (dot(dx, dx) + dot(dy, dy)) / (gSplatSize * gSplatSize);
     return area;
 }
-
 
 void updateRefractRayDifferential(float3 D, float3 R, float3 N, float eta, float3 dPdx, float3 dNdx, inout float3 dDdx)
 {
@@ -448,16 +439,24 @@ void primaryClosestHit(inout CausticsPackedPayload payload, in BuiltInTriangleIn
 #elif defined(RAY_CONE)
     hitData.radius = abs(hitData.radius + hitT * hitData.dRadius);
 #endif
-    // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    ShadingData sd = prepareShadingData(v, gMaterial, rayOrigW, 0);
+
+    const uint materialID = gScene.getMaterialID(instanceID);
+    let lod = ExplicitLodTextureSampler(0.0f);
+    VertexData v2 = getVertexData(instanceID, triangleIndex, attribs);
+    ShadingData sd = gScene.materials.prepareShadingData(v2, materialID, rayOrigW /*, 0*/);
+
+    uint hints = 0u;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+    BSDFProperties bsdfProperties = mi.getProperties(sd);
 
     hitData.hitT = hitT;
-    bool isSpecular = (sd.linearRoughness > roughThreshold || sd.opacity < 1);
+    bool isSpecular = (bsdfProperties.roughness > roughThreshold || /*sd.opacity < 1*/bsdfProperties.isTransmissive);
     hitData.isContinue = isSpecular;
     if (isSpecular)
     {
         float3 N_ = v.normalW;
-        bool isReflect = (sd.opacity == 1);
+        //bool isReflect = (sd.opacity == 1);
+        bool isReflect = !bsdfProperties.isTransmissive; // probably?
         float3 R;
         float eta = iorOverride > 0 ? 1.0 / iorOverride : 1.0 / sd.IoR;
         if (!isReflect)
@@ -528,13 +527,15 @@ void primaryClosestHit(inout CausticsPackedPayload payload, in BuiltInTriangleIn
         float area = 0.0001f;
 #endif
         hitData.nextDir = R;
-        float3 baseColor = lerp(1, sd.diffuse, sd.opacity);
+        float3 baseColor = bsdfProperties.diffuseReflectionAlbedo; /*lerp(1, sd.diffuse, sd.opacity);*/
         hitData.color = baseColor * hitData.color; // *float4(sd.specular, 1);
     }
     else
     {
-        hitData.color.rgb = dot(-rayDirW, sd.N) * sd.diffuse * hitData.color.rgb;
-        hitData.nextDir = sd.N;
+        //hitData.color.rgb = dot(-rayDirW, sd.N) * bsdfProperties.diffuseReflectionAlbedo/*sd.diffuse*/ * hitData.color.rgb;
+        hitData.color.rgb = dot(-rayDirW, bsdfProperties.guideNormal) * bsdfProperties.diffuseReflectionAlbedo/*sd.diffuse*/ * hitData.color.rgb;
+        //hitData.nextDir = sd.N;
+        hitData.nextDir = bsdfProperties.guideNormal;
     }
 
     packCausticsPayload(hitData, payload);
@@ -804,9 +805,9 @@ bool getTask(out float2 lightUV, out uint2 pixelCoord, out float2 pixelSize)
 void rayGen()
 {
     // fetch task
-    float2 lightUV;
-    uint2 pixelCoord;
-    float2 pixelSize;
+    float2 lightUV = 0.0f.xx;
+    uint2 pixelCoord = 0u.xx;
+    float2 pixelSize = 0.0f.xx;
     if (!getTask(lightUV, pixelCoord, pixelSize)) return;
 
     // Init ray and hit data

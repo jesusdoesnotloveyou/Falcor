@@ -27,7 +27,7 @@
 ***************************************************************************/
 #include "Common.hlsl"
 
-/*shared*/ cbuffer PerFrameCB
+cbuffer PerFrameCB
 {
     float4x4 reprojMatrix;
     float4x4 invProjMatThis;
@@ -83,12 +83,12 @@ void main(uint3 threadIdx : SV_DispatchThreadID)
     float viewDepthLast = toViewSpace(invProjMatLast, depthLast);
 
     float weight = 0;
-    if (depthLast < 1)
+    if (depthLast < 1.0f)
     {
-        float normalDiff = (1 - saturate(dot(normal, normalLast))) / normalKernel * 100;
+        float normalDiff = (1.0f - saturate(dot(normal, normalLast))) / normalKernel * 100;
         float depthDiff = abs(viewDepthThis - viewDepthLast) / depthKernel;
         float colorDiff = length(colorLast - color) / colorKernel;
-        weight = blendWeight * exp(-1 * (normalDiff * normalDiff + depthDiff * depthDiff + colorDiff * colorDiff));
+        weight = blendWeight * exp(-1.0f * (normalDiff * normalDiff + depthDiff * depthDiff + colorDiff * colorDiff));
     }
 
     //causticsTexThis[causticsPixelPos] = float4(normalLast, 1);

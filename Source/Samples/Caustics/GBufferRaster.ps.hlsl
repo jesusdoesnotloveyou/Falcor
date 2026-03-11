@@ -25,48 +25,44 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ***************************************************************************/
-//__import ShaderCommon;
-//__import Shading;
-//__import DefaultVS;
 
 import Scene.Raster;
+import Scene.Material.MaterialSystem;
 import Utils.Sampling.TinyUniformSampleGenerator;
 import Utils.Math.MathHelpers;
 import Rendering.Lights.LightHelpers;
 import Rendering.Materials.TexLODHelpers;
 
-struct GPassPsOut
+struct GBufferOut
 {
     float4 normal : SV_TARGET0;
     float4 diffuse : SV_TARGET1;
     float4 specular : SV_TARGET2;
 };
 
-VSOut vsMain(VSIn vIn)
-{
-    return defaultVS(vIn);
-}
+//VSOut vsMain(VSIn vIn)
+//{
+//    return defaultVS(vIn);
+//}
 
-GPassPsOut gpassPS(VSOut vOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
+GBufferOut psMain(VSOut vOut, uint triangleIndex : SV_PrimitiveID) : SV_TARGET
 {
-    let lod = ImplicitLodTextureSampler();
     float3 viewDir = normalize(gScene.camera.getPosition() - vOut.posW);
+    let lod = ImplicitLodTextureSampler();
     ShadingData sd = prepareShadingData(vOut, triangleIndex, viewDir/*, lod*/);
-    //ShadingData sd = prepareShadingData(vOut, gMaterial, gCamera.posW);
 
     uint hints = 0u;
     // Create BSDF instance and query its properties.
-    //let bsdf = gScene.materials.getBSDF(sd, lod);
-    //let bsdfProperties = bsdf.getProperties(sd);
     let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
     BSDFProperties bsdfProperties = mi.getProperties(sd);
 
-    if (sd.opacity < 1)
+    //if (sd.opacity < 1) 
+    if (bsdfProperties.isTransmissive < 1)
     {
         discard;
     }
     
-    GPassPsOut output;
+    GBufferOut output;
     output.normal = float4(normalize(vOut.normalW.xyz), 1.0f);
     output.diffuse = float4(bsdfProperties.diffuseReflectionAlbedo, bsdfProperties.roughness);
     output.specular = float4(bsdfProperties.specularReflectionAlbedo, /*sd.opacity*/0.5f);
