@@ -8,6 +8,7 @@ target_sources(ReSTIR_FPDG PRIVATE
     ResamplePhotonDifferentialsReservoirFG.cs.slang
     ResamplePhotonDifferentialsReservoirCaustic.cs.slang
     StructsAndHelpers.slang
+    PhotonDifferentials.slang
     GenerateInitialSamples.rt.slang
     TracePhotonDifferentials.rt.slang
 )
