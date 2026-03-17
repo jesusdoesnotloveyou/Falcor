@@ -58,13 +58,46 @@ public:
     virtual bool onMouseEvent(const MouseEvent& mouseEvent) override { return false; }
     virtual bool onKeyEvent(const KeyboardEvent& keyEvent) override { return false; }
 
+public:
+    void beginFrame(RenderContext* pRenderContext, const RenderData& renderData);
+    void endFrame();
+    void update();
+
 private:
-    void setupRaytracingPrograms();
+    void updatePrograms();
 
     void setupLights(RenderContext* pRenderContext);
     void setupResources(RenderContext* pRenderContext, const RenderData& renderData);
 
+    // Traces the photons and builds the photon Acceleration Structure
+    void tracePhotonDifferentialsPass(RenderContext* pRenderContext, const RenderData& renderData, bool analyticOnly = false, bool buildAS = true);
+
+    // Handles readback of the photon counter and adjusts dispatched photons dynamically for the next trace photons pass
+    void handlePhotonCounter(RenderContext* pRenderContext);
+
+    // Generates the initial Samples for the reservoirs (FG) and initializes RTXDI surfaces
+    void generateInitialSamplesPass(RenderContext* pRenderContext, const RenderData& renderData);
+
+    // Reservoir Resampling for Final Gather Samples
+    void resampleReservoirFGPass(RenderContext* pRenderContext, const RenderData& renderData);
+
+    // Reservoir Resampling for Caustic Samples
+    void resampleReservoirCausticPass(RenderContext* pRenderContext, const RenderData& renderData);
+
+    // Evaluate Reservoirs
+    void evaluateReservoirsPass(RenderContext* pRenderContext, const RenderData& renderData);
+
+    DefineList getMaterialDefines();
+
 private:
+    struct ResamplingSettings
+    {
+        bool enable = true;
+        uint confidenceCap = 20;                // Maximum confidence allowed
+        uint spatialSamples = 1;                // Number of spatial samples
+        uint disocclusionBoostExtraSamples = 1; // Number of spatial samples if no temporal surface was found
+        float samplingRadius = 20.f;            // Sampling radius in pixel
+    };
 
     enum class DirectLightingMode
     {
@@ -87,6 +120,12 @@ private:
         ReSTIRGI = 2u
     };
 
+    enum class PhotonType
+    {
+        GLOBAL = 0u,
+        CAUSTIC,
+    };
+
     //
     // Parameters
     //
@@ -98,25 +137,64 @@ private:
     uint mFrameCount = 0u;
     uint2 mScreenRes = uint2(0u, 0u);
 
-    ref<Scene> mpScene;                                             // Scene ptr
-    ref<SampleGenerator> mpSampleGenerator;                         // GPU Sample Gen
-    std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler;   // Light sampler
-    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Power; 
+    float mSpecularRoughnessThreshold = 0.25f; // Any material below this is considered specular
 
-    std::unique_ptr<RTXDI> mpRTXDI;                     // Ptr to RTXDI for direct use
-    RTXDI::Options mRTXDIOptions;                       // Options for RTXDI
+
+    // ReSTIR-FG Reservoirs
+    ResamplingSettings mResampleSettingsFG = {};
+    ResamplingSettings mResampleSettingsCaustic = {};
+
+    uint mFGRayMaxPathLength = 10;                      // Max path length for the final gather ray
+    bool mRebuildReservoirBuffer = false;               // Rebuild the reservoir buffer
+    bool mClearReservoir = true;                        // Clears both reservoirs
+    bool mCanResample = false;                          // Resampling is only allowed if last iterations reservoir was created
+    float mRelativeDepthThreshold = 0.15f;              // Relative Depth threshold (is neighbor 0.1 = 10% as near as the current depth)
+    float mNormalThreshold = 0.6f;                      // Cosine of maximum angle between both normals allowed
+    float mJacobianDistanceThreshold = 0.001f;          // Threshold for Jacobian distances
+    bool mUsePathThreshold = false;                     // Enable resampling only if path length are the same
+    bool mUsePhotonsForDirectLightInReflections = true; // Uses photons for direct light in reflections, else the final gather sample is used
+
+    // Photon Distribution
+    uint mPhotonMaxBounces = 10u;                       // Number of photon bounces
+    float mGlobalPhotonRejection = 0.3f;                // Probability a global photon is stored
+    uint mNumDispatchedPhotons = 2000000u;              // Number of photons dispatched
+    uint2 mNumMaxPhotons = uint2(400000u, 300000u);     // Size of the photon buffer
+    uint2 mNumMaxPhotonsUI = mNumMaxPhotons;            // For UI, as changing happens with a button
+    bool mChangePhotonLightBufferSize = true;           // True if buffer size has changed
+    uint2 mCurrentPhotonCount = mNumMaxPhotons;         // For dynamic photon propagation
+    float2 mPhotonRadius = float2(0.020f, 0.005f);      // Global/Caustic Radius.
+    float mPhotonAnalyticRatio = 0.5f;                  // Analytic photon distribution ratio in a mixed light case. E.g. 0.3 -> 30% analytic, 70% emissive
+
+    bool mUseDynamicPhotonDispatchCount = true;         // Dynamically change the number of photons to fit the max photon number
+    uint mPhotonDynamicDispatchMax = 4000000u;          // Max value for dynamically dispatched photons
+    float mPhotonDynamicGuardPercentage = 0.08f;        // Determines how much space of the buffer is used to guard against buffer overflows
+    float mPhotonDynamicChangePercentage = 0.04f;       // The percentage the buffer is increased/decreased per frame
+
+    ref<Scene> mpScene;                                                                 // Scene ptr
+    ref<SampleGenerator> mpSampleGenerator;                                             // GPU Sample Gen
+    std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler;                       // Light sampler
+    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Power;    
+    std::unique_ptr<RTXDI> mpRTXDI;                                                     // Ptr to RTXDI for direct use
+    RTXDI::Options mRTXDIOptions;                                                       // Options for RTXDI
 
     bool mResetScreenRes = false;
-    bool mCanResample = false;                           // Resampling is only allowed if last iterations reservoir was created
+    bool mRecompile = false;
+
+    // Material Settings
+    bool mUseLambertianDiffuse = true; // Diffuse BRDF used by ReSTIR PT and SuffixReSTIR
+    bool mDisableDiffuse = false;
+    bool mDisableSpecular = false;
+    bool mDisableTranslucency = false;
+    bool mStoreSampleGenState = false; // Stores samples GenStates
 
     //
     // Lights
     //
-
     bool mHasLights = false;
     bool mHasEmissiveLights = false;
     bool mHasAnalyticLights = false;
     bool mHasMixedLights = false;
+    bool mHasEnvBackground = false;
 
     //
     // Resources
