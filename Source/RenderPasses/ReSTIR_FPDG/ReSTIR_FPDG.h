@@ -34,6 +34,7 @@
 
 #include "Rendering/RTXDI/RTXDI.h"
 #include "Rendering/Lights/EmissiveLightSampler.h"
+#include "Rendering/AccelerationStructure/CustomAccelerationStructure.h"
 
 using namespace Falcor;
 
@@ -61,13 +62,15 @@ public:
 public:
     void beginFrame(RenderContext* pRenderContext, const RenderData& renderData);
     void endFrame();
-    void update();
 
 private:
     void updatePrograms();
 
     void setupLights(RenderContext* pRenderContext);
     void setupResources(RenderContext* pRenderContext, const RenderData& renderData);
+
+    // Handles the photon acceleration structure
+    void setupPhotonDifferentialsAS();
 
     // Traces the photons and builds the photon Acceleration Structure
     void tracePhotonDifferentialsPass(RenderContext* pRenderContext, const RenderData& renderData, bool analyticOnly = false, bool buildAS = true);
@@ -120,10 +123,11 @@ private:
         ReSTIRGI = 2u
     };
 
-    enum class PhotonType
+    enum PhotonType
     {
         GLOBAL = 0u,
         CAUSTIC,
+        MAX
     };
 
     //
@@ -139,8 +143,7 @@ private:
 
     float mSpecularRoughnessThreshold = 0.25f; // Any material below this is considered specular
 
-
-    // ReSTIR-FG Reservoirs
+    // ReSTIR-FG Reservoirs. See ReSTIR-FG paper
     ResamplingSettings mResampleSettingsFG = {};
     ResamplingSettings mResampleSettingsCaustic = {};
 
@@ -162,6 +165,7 @@ private:
     uint2 mNumMaxPhotonsUI = mNumMaxPhotons;            // For UI, as changing happens with a button
     bool mChangePhotonLightBufferSize = true;           // True if buffer size has changed
     uint2 mCurrentPhotonCount = mNumMaxPhotons;         // For dynamic photon propagation
+    float mASBuildBufferPhotonOverestimate = 1.15f;     // Guard percentage for AS building
     float2 mPhotonRadius = float2(0.020f, 0.005f);      // Global/Caustic Radius.
     float mPhotonAnalyticRatio = 0.5f;                  // Analytic photon distribution ratio in a mixed light case. E.g. 0.3 -> 30% analytic, 70% emissive
 
@@ -173,12 +177,14 @@ private:
     ref<Scene> mpScene;                                                                 // Scene ptr
     ref<SampleGenerator> mpSampleGenerator;                                             // GPU Sample Gen
     std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler;                       // Light sampler
-    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Power;    
+    EmissiveLightSamplerType mEmissiveSamplerType = EmissiveLightSamplerType::Power;
+    std::unique_ptr<CustomAccelerationStructure> mpPhotonDifferentialAS;                // Accel Pointer. Custom type, better use intrinsic Falcor tools
     std::unique_ptr<RTXDI> mpRTXDI;                                                     // Ptr to RTXDI for direct use
     RTXDI::Options mRTXDIOptions;                                                       // Options for RTXDI
 
     bool mResetScreenRes = false;
     bool mRecompile = false;
+    bool mOptionsChanged = false;
 
     // Material Settings
     bool mUseLambertianDiffuse = true; // Diffuse BRDF used by ReSTIR PT and SuffixReSTIR
@@ -199,6 +205,7 @@ private:
     //
     // Resources
     //
+    // IMPORTANT: Keep track of shader structs size when creating resources on the CPU side
     ref<Buffer> mpPhotonAABB[2];           // Photon AABBs for Acceleration Structure building
     ref<Buffer> mpPhotonData[2];           // Additional Photon data (flux, dir)
     ref<Buffer> mpPhotonCounter;           // Photon Counter

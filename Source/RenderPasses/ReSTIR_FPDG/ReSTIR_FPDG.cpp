@@ -29,6 +29,7 @@
 #include "ReSTIR_FPDG.h"
 
 #include "RenderGraph/RenderPassHelpers.h"
+#include "RenderGraph/RenderPassStandardFlags.h"
 
 #include "Rendering/Lights/EmissiveUniformSampler.h"
 #include "Rendering/Lights/LightBVHSampler.h"
@@ -97,9 +98,16 @@ void ReSTIR_FPDG::execute(RenderContext* pRenderContext, const RenderData& rende
 {
     if (!mpScene) return;
 
-    beginFrame(pRenderContext, renderData);
+    // Add refresh flag if options changed
+    auto& dict = renderData.getDictionary();
+    auto flags = dict.getValue(kRenderPassRefreshFlags, RenderPassRefreshFlags::None);
+    if (mOptionsChanged)
+    {
+        dict[Falcor::kRenderPassRefreshFlags] = flags | Falcor::RenderPassRefreshFlags::RenderOptionsChanged;
+        mOptionsChanged = false;
+    }
 
-    const auto& motionVectors = renderData.getResource(kInputMotionVectors)->asTexture();
+    beginFrame(pRenderContext, renderData);
 
     // Init RTXDI if it is enabled
     if (mDirectLightMode == DirectLightingMode::RTXDI && !mpRTXDI)
@@ -110,11 +118,23 @@ void ReSTIR_FPDG::execute(RenderContext* pRenderContext, const RenderData& rende
     if (mDirectLightMode != DirectLightingMode::RTXDI && mpRTXDI) mpRTXDI = nullptr;
 
     if (mpRTXDI) mpRTXDI->beginFrame(pRenderContext, mScreenRes);
-    if (mpRTXDI) mpRTXDI->update(pRenderContext, motionVectors);
 
-    tracePhotonDifferentialsPass(pRenderContext, renderData, !mHasMixedLights && mHasAnalyticLights, true);
+    pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0u));
+
+    tracePhotonDifferentialsPass(pRenderContext, renderData, !mHasMixedLights && mHasAnalyticLights, !mHasMixedLights && mPhotonAnalyticRatio > 0);
+    if (mHasMixedLights && mPhotonAnalyticRatio > 0)
+        tracePhotonDifferentialsPass(pRenderContext, renderData, true, true); // Second pass. Always Analytic
     generateInitialSamplesPass(pRenderContext, renderData);
     
+    const auto& motionVectors = renderData.getResource(kInputMotionVectors)->asTexture();
+    if (mpRTXDI) mpRTXDI->update(pRenderContext, motionVectors);
+
+    // Spatiotemporal resampling for final gather samples and caustics
+    resampleReservoirFGPass(pRenderContext, renderData);
+    resampleReservoirCausticPass(pRenderContext, renderData);
+
+    // Final shading
+    evaluateReservoirsPass(pRenderContext, renderData);
 
     if (mpRTXDI) mpRTXDI->endFrame(pRenderContext);
 
@@ -122,7 +142,134 @@ void ReSTIR_FPDG::execute(RenderContext* pRenderContext, const RenderData& rende
     mCanResample = true;
 }
 
-void ReSTIR_FPDG::renderUI(Gui::Widgets& widget) {}
+void ReSTIR_FPDG::renderUI(Gui::Widgets& widget)
+{
+    bool changed = false;
+
+    if (auto group = widget.group("Photon Options"))
+    {
+        if (mUseDynamicPhotonDispatchCount)
+        {
+            group.text("Dispatched Photons: " + std::to_string(mNumDispatchedPhotons));
+        }
+        else
+        {
+            group.var("Dispatched Photons", mNumDispatchedPhotons, 1024u, 67108864u, 1u); // Max is 8192^2
+        }
+
+        group.text("Global Photons: " + std::to_string(mCurrentPhotonCount[0]) + " / " + std::to_string(mNumMaxPhotons[0]));
+        group.text("Caustic photons: " + std::to_string(mCurrentPhotonCount[1]) + " / " + std::to_string(mNumMaxPhotons[1]));
+        group.text("Photon Buffer Size:");
+        group.indent(10.f);
+        group.var(" ##MaxPhotonUI", mNumMaxPhotonsUI, 100u, 100000000u, 100);
+        group.tooltip("First -> Global, Second -> Caustic");
+        mChangePhotonLightBufferSize = group.button("Apply", true);
+        group.indent(-10.f);
+        if (auto groupGen = group.group("Generation Settings", true))
+        {
+            if (mHasMixedLights)
+            {
+                changed |= groupGen.var("Mixed Analytic Ratio", mPhotonAnalyticRatio, 0.f, 1.f, 0.01f);
+                groupGen.tooltip("Analytic photon distribution ratio in a mixed light case. E.g. 0.3 -> 30% analytic, 70% emissive");
+            }
+
+            changed |= groupGen.checkbox("Enable dynamic photon dispatch", mUseDynamicPhotonDispatchCount);
+            groupGen.tooltip("Changed the number of dispatched photons dynamically. Tries to fill the photon buffer");
+            if (mUseDynamicPhotonDispatchCount)
+            {
+                if (auto groupDynChange = groupGen.group("DynamicDispatchOptions"))
+                {
+                    changed |= groupDynChange.var("Max dispatched", mPhotonDynamicDispatchMax, 1024u, 67108864u);
+                    changed |= groupDynChange.var("Guard Percentage", mPhotonDynamicGuardPercentage, 0.0f, 1.f, 0.001f);
+                    groupDynChange.tooltip(
+                        "If current fill rate is under PhotonBufferSize * (1-pGuard), the values are accepted. Reduces the changes "
+                        "every frame"
+                    );
+                    changed |= groupDynChange.var("Percentage Change", mPhotonDynamicChangePercentage, 0.01f, 10.f, 0.01f);
+                    groupDynChange.tooltip(
+                        "Increase/Decrease percentage from the Buffer Size. With current value a increase/decrease of :" +
+                        std::to_string(mPhotonDynamicChangePercentage * mNumMaxPhotons[0]) + "is expected"
+                    );
+                }
+            }
+
+            changed |= groupGen.var("Light Store Probability", mGlobalPhotonRejection, 0.f, 1.f, 0.0001f);
+            group.tooltip("Probability a photon light is stored on diffuse hit. Flux is scaled up appropriately");
+
+            changed |= groupGen.var("Max Bounces", mPhotonMaxBounces, 0u, 32u);
+
+            groupGen.separator();
+        }
+        group.text("Photon Radius(Global / Caustic):");
+        group.indent(10.f);
+        group.var(" ##PhotonRadius", mPhotonRadius, 0, FLT_MAX, 0.0001f, false, "%.6f");
+        group.indent(-10.f);
+    }
+
+    if (auto group = widget.group("RTXDI"))
+    {
+        if (mpRTXDI)
+        {
+            mpRTXDI->renderUI(group);
+        }
+        else
+        {
+            group.text("Load a scene for RTXDI options");
+        }
+    }
+
+    if (auto group = widget.group("ReSTIR FG"))
+    {
+        group.var("Final Gather Path Length", mFGRayMaxPathLength, 1u, 64u, 1u);
+        group.tooltip(
+            "Path length for a final gather sample. A final gather sample stops when it encounters a rough enough surface (see Material "
+            "Options)"
+        );
+
+        auto resampleUI = [](ResamplingSettings& settings, Gui::Widgets& widget)
+        {
+            widget.checkbox("Enable Resampling", settings.enable);
+            widget.var("Confidence Cap", settings.confidenceCap, 1u, UINT_MAX, 1u);
+            widget.tooltip("Maximum confidence a reservoir can have");
+            widget.var("Spatial Samples", settings.spatialSamples, 0u, 64u, 1u);
+            widget.var("Disocclusion additional spatial samples", settings.disocclusionBoostExtraSamples, 0u, 16u, 1u);
+            widget.tooltip("Extra spatial samples if temporal resampling fails");
+            widget.var("Spatial Sample Radius", settings.samplingRadius, 0.f, FLT_MAX, 1.f);
+        };
+
+        if (auto group2 = group.group("Resampling FG options"))
+        {
+            resampleUI(mResampleSettingsFG, group2);
+        }
+        if (auto group2 = group.group("Resampling Caustic options"))
+        {
+            resampleUI(mResampleSettingsCaustic, group2);
+        }
+
+        group.separator();
+        group.text("Surface Rejection Options:");
+        group.var("Normal Rejection Threshold", mNormalThreshold, 0.f, 1.0f, 0.001f);
+        group.tooltip("Threshold of dot product between both reservoir face normals");
+        group.var("Sample Distance Threshold", mJacobianDistanceThreshold, 0.f, FLT_MAX, 0.001f);
+        group.checkbox("Use Path Threshold", mUsePathThreshold);
+        group.tooltip(
+            "Only resamples if the surfaces used for generating the Final Gather samples have the same path length. Always enabled for "
+            "caustic collection"
+        );
+    }
+
+    if (auto group = widget.group("Material Options"))
+    {
+        group.checkbox("Use Lambertian Diffuse BSDF", mUseLambertianDiffuse);
+        group.tooltip("BSDF used by ReSTIR PT and Suffix ReSTIR prototype");
+
+        group.text("Diffuse Classification Roughness Threshold:");
+        group.tooltip("Surfaces with roughness above this threshold are considered diffuse");
+        group.indent(10.f);
+        group.var("##RoughnessThreshold", mSpecularRoughnessThreshold, 0.f, 1.f, 0.001f);
+        group.indent(-10.f);
+    }
+}
 
 void ReSTIR_FPDG::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
 {
@@ -131,6 +278,7 @@ void ReSTIR_FPDG::setScene(RenderContext* pRenderContext, const ref<Scene>& pSce
 
     mpRTXDI.reset();
     mpEmissiveLightSampler.reset();
+    mResetScreenRes = true;
 
     mTracePhotonDifferentialsPass = RaytracingProgramHelper ::create();
     mGenerateInitialSamplesPass = RaytracingProgramHelper::create();
@@ -138,6 +286,8 @@ void ReSTIR_FPDG::setScene(RenderContext* pRenderContext, const ref<Scene>& pSce
     mpResamplePhotonDifferentialsReservoirFGPass.reset();
     mpResamplePhotonDifferentialsReservoirCausticPass.reset();
     mpEvaluatePhotonDifferentialsReservoirsPass.reset();
+
+    mChangePhotonLightBufferSize = true;
 
     if (mpScene && mpScene->hasGeometryType(Scene::GeometryType::Custom))
     {
@@ -151,18 +301,15 @@ void ReSTIR_FPDG::setScene(RenderContext* pRenderContext, const ref<Scene>& pSce
 void ReSTIR_FPDG::beginFrame(RenderContext* pRenderContext, const RenderData& renderData)
 {
     //setupLights(pRenderContext);
-    updatePrograms();
+    //updatePrograms();
     setupResources(pRenderContext, renderData);
+
+    setupPhotonDifferentialsAS();
 }
 
 void ReSTIR_FPDG::endFrame()
 {
-
-}
-
-void ReSTIR_FPDG::update()
-{
-
+    // for PixelDebug and PixelStats
 }
 
 void ReSTIR_FPDG::updatePrograms()
@@ -259,7 +406,7 @@ void ReSTIR_FPDG::setupResources(RenderContext* pRenderContext, const RenderData
 
         if (!mpPhotonData[i])
         {
-            mpPhotonData[i] = mpDevice->createStructuredBuffer(48u /*See the photonData struct in shader*/,
+            mpPhotonData[i] = mpDevice->createStructuredBuffer(80u /*See the photonData struct in shader*/,
                 mNumMaxPhotons[i], ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal, nullptr, false);
             mpPhotonData[i]->setName("PhotonData" + std::to_string(i));
         }
@@ -268,7 +415,7 @@ void ReSTIR_FPDG::setupResources(RenderContext* pRenderContext, const RenderData
         {
             mCanResample = false;
             mpCausticReservoir[i] = mpDevice->createStructuredBuffer(
-                112u, mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal, nullptr, false);
+                128u, mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal, nullptr, false);
             mpCausticReservoir[i]->setName("CausticReservoir" + std::to_string(i));
         }
 
@@ -302,6 +449,26 @@ void ReSTIR_FPDG::setupResources(RenderContext* pRenderContext, const RenderData
     }
 
     mResetScreenRes = false;
+}
+
+void ReSTIR_FPDG::setupPhotonDifferentialsAS()
+{
+    // Delete the Photon differentials AS if max Buffer size changes
+    if (mChangePhotonLightBufferSize)
+    {
+        mpPhotonDifferentialAS.reset();
+        mChangePhotonLightBufferSize = false;
+    }
+
+    // Create AS
+    if (!mpPhotonDifferentialAS)
+    {
+        std::vector<uint64_t> aabbCount = {mNumMaxPhotons[PhotonType::GLOBAL], mNumMaxPhotons[PhotonType::CAUSTIC]};
+        std::vector<uint64_t> aabbGPUAddress = {mpPhotonAABB[PhotonType::GLOBAL]->getGpuAddress(), mpPhotonAABB[PhotonType::CAUSTIC]->getGpuAddress()};
+
+        mpPhotonDifferentialAS = std::make_unique<CustomAccelerationStructure>(mpDevice, aabbCount, aabbGPUAddress,
+            CustomAccelerationStructure::BuildMode::FastBuild, CustomAccelerationStructure::UpdateMode::TLASOnly);
+    }
 }
 
 void ReSTIR_FPDG::tracePhotonDifferentialsPass(RenderContext* pRenderContext, const RenderData& renderData, bool analyticOnly, bool buildAS)
@@ -377,10 +544,36 @@ void ReSTIR_FPDG::tracePhotonDifferentialsPass(RenderContext* pRenderContext, co
     var["CB"]["gGlobalRejectionProb"] = mGlobalPhotonRejection;
     var["CB"]["gUseAnalyticLights"] = analyticOnly;   
 
-    uint3 dispatchDims(shaderDispatchDim, shaderDispatchDim, 1u);
-    mpScene->raytrace(pRenderContext, mTracePhotonDifferentialsPass.pProgram.get(), mTracePhotonDifferentialsPass.pVars, dispatchDims);
+    for (uint i = 0; i < 2; i++)
+    {
+        var["gPhotonAABB"][i] = mpPhotonAABB[i];
+        var["gPhotonData"][i] = mpPhotonData[i];
+    }
+    var["gPhotonCounter"] = mpPhotonCounter;
+
+    mpScene->raytrace(pRenderContext, mTracePhotonDifferentialsPass.pProgram.get(), mTracePhotonDifferentialsPass.pVars, uint3(shaderDispatchDim, shaderDispatchDim, 1u));
+    
+    // If two passes are dispatched, the acceleration structure is build on the second dispatch
+    if (buildAS)
+    {
+        // Clear values after the counter
+        std::vector<ref<Buffer>> aabbs = {mpPhotonAABB[PhotonType::GLOBAL], mpPhotonAABB[PhotonType::CAUSTIC]};
+        mpPhotonDifferentialAS->clearAABBBuffers(pRenderContext, aabbs, true, mpPhotonCounter);
+
+        // Copy counter to CPU
+        handlePhotonCounter(pRenderContext);
+
+        // Build acceleration structure
+        uint2 currentPhotons = mFrameCount > 0 ? uint2(float2(mCurrentPhotonCount) * mASBuildBufferPhotonOverestimate) : mNumMaxPhotons;
+        std::vector<uint64_t> photonBuildSize = {
+            std::min(mNumMaxPhotons[PhotonType::GLOBAL], currentPhotons[PhotonType::GLOBAL]),
+            std::min(mNumMaxPhotons[PhotonType::CAUSTIC], currentPhotons[PhotonType::CAUSTIC])
+        };
+        mpPhotonDifferentialAS->update(pRenderContext, photonBuildSize);
+    }
 }
 
+// Works with 2-3 frames delay
 void ReSTIR_FPDG::handlePhotonCounter(RenderContext* pRenderContext)
 {
     // Try this with raw d3d12 in your framework
@@ -466,6 +659,8 @@ void ReSTIR_FPDG::generateInitialSamplesPass(RenderContext* pRenderContext, cons
         mGenerateInitialSamplesPass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
 
     FALCOR_ASSERT(mGenerateInitialSamplesPass.pVars);
+
+    // Set variables
     auto var = mGenerateInitialSamplesPass.pVars->getRootVar();
 
     // Set RTXDI resources
@@ -475,8 +670,28 @@ void ReSTIR_FPDG::generateInitialSamplesPass(RenderContext* pRenderContext, cons
     var["CB"]["gFrameCount"] = mFrameCount;
     var["CB"]["gFGRayMaxPathLength"] = mFGRayMaxPathLength;
 
-    uint3 dispatchDims(mScreenRes.x, mScreenRes.y, 1u);
-    mpScene->raytrace(pRenderContext, mGenerateInitialSamplesPass.pProgram.get(), mGenerateInitialSamplesPass.pVars, dispatchDims);
+    // Input resources
+    // Input V-Buffer
+    var["gVBuffer"] = renderData.getResource(kInputVBuffer)->asTexture();
+    // Input TLAS of photon differentials
+    mpPhotonDifferentialAS->bindTlas(var, "gPhotonAS");
+    // Input AABB and photon differentials data (output from Trace pass)
+    for (uint i = 0; i < 2; i++)
+    {
+        var["gPhotonAABB"][i] = mpPhotonAABB[i];
+        var["gPhotonData"][i] = mpPhotonData[i];
+    }
+
+    // Output
+    var["gFinalGatherReservoir"] = mpFinalGatherReservoir[mFrameCount % 2];
+    var["gCausticReservoir"] = mpCausticReservoir[mFrameCount % 2];
+    var["gEmission"] = mpEmission;
+
+    mpScene->raytrace(pRenderContext, mGenerateInitialSamplesPass.pProgram.get(), mGenerateInitialSamplesPass.pVars, uint3(mScreenRes, 1u));
+
+    // D3D12 Resource barriers
+    pRenderContext->uavBarrier(mpFinalGatherReservoir[mFrameCount % 2].get());
+    pRenderContext->uavBarrier(mpCausticReservoir[mFrameCount % 2].get());
 }
 
 // Reservoir Resampling for Final Gather Samples
@@ -508,6 +723,29 @@ void ReSTIR_FPDG::resampleReservoirFGPass(RenderContext* pRenderContext, const R
 
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
     mpSampleGenerator->bindShaderData(var);
+
+    // CB
+    var["CB"]["gFrameCount"] = mFrameCount;
+    var["CB"]["gFrameDim"] = mScreenRes;
+    var["CB"]["gConfidenceLimit"] = mResampleSettingsFG.confidenceCap;
+    var["CB"]["gSpatialRadius"] = mResampleSettingsFG.samplingRadius;
+    var["CB"]["gSpatialSamples"] = mResampleSettingsFG.spatialSamples;
+    var["CB"]["gDisocclusionBoostSpatialSamples"] = mResampleSettingsFG.disocclusionBoostExtraSamples;
+    var["CB"]["gNormalThreshold"] = mNormalThreshold;
+    var["CB"]["gJacobianDistanceThreshold"] = mJacobianDistanceThreshold;
+    var["CB"]["gUsePathThreshold"] = mUsePathThreshold;
+
+    // Input resources
+    var["gMVec"] = renderData.getResource(kInputMotionVectors)->asTexture();
+    var["gFinalGatherReservoirPrev"] = mpFinalGatherReservoir[(mFrameCount + 1) % 2];
+
+    // In/Out resources
+    var["gFinalGatherReservoir"] = mpFinalGatherReservoir[mFrameCount % 2];
+
+    // Execute Compute Pass
+    const uint2 targetDim = renderData.getDefaultTextureDims();
+    FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+    mpResamplePhotonDifferentialsReservoirFGPass->execute(pRenderContext, uint3(targetDim, 1u));
 }
 
 // Reservoir Resampling for Caustic Samples
@@ -541,6 +779,27 @@ void ReSTIR_FPDG::resampleReservoirCausticPass(RenderContext* pRenderContext, co
     mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
     mpSampleGenerator->bindShaderData(var);
 
+    // CB
+    var["CB"]["gFrameCount"] = mFrameCount;
+    var["CB"]["gFrameDim"] = mScreenRes;
+    var["CB"]["gConfidenceLimit"] = mResampleSettingsCaustic.confidenceCap;
+    var["CB"]["gSpatialRadius"] = mResampleSettingsCaustic.samplingRadius;
+    var["CB"]["gSpatialSamples"] = mResampleSettingsCaustic.spatialSamples;
+    var["CB"]["gDisocclusionBoostSpatialSamples"] = mResampleSettingsCaustic.disocclusionBoostExtraSamples;
+    var["CB"]["gNormalThreshold"] = mNormalThreshold;
+    var["CB"]["gPhotonRadius"] = mPhotonRadius;
+
+    // Input resources
+    var["gMVec"] = renderData.getResource(kInputMotionVectors)->asTexture();
+    var["gCausticReservoirPrev"] = mpFinalGatherReservoir[(mFrameCount + 1) % 2];
+
+    // In/Out resources
+    var["gCausticReservoir"] = mpFinalGatherReservoir[mFrameCount % 2];
+
+    // Execute Compute Pass
+    const uint2 targetDim = renderData.getDefaultTextureDims();
+    FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+    mpResamplePhotonDifferentialsReservoirCausticPass->execute(pRenderContext, uint3(targetDim, 1u));
 }
 
 // Evaluate Reservoirs
@@ -565,6 +824,32 @@ void ReSTIR_FPDG::evaluateReservoirsPass(RenderContext* pRenderContext, const Re
         mpEvaluatePhotonDifferentialsReservoirsPass = ComputePass::create(mpDevice, desc, globalDefines, true);
     }
     FALCOR_ASSERT(mpEvaluatePhotonDifferentialsReservoirsPass);
+
+    // Set variables
+    auto var = mpEvaluatePhotonDifferentialsReservoirsPass->getRootVar();
+    // Set RTXDI resources
+    mpRTXDI->bindShaderData(var);
+
+    mpScene->bindShaderDataForRaytracing(pRenderContext, var["gScene"]);
+    mpSampleGenerator->bindShaderData(var);
+
+    // CB
+    var["CB"]["gFrameCount"] = mFrameCount;
+    var["CB"]["gFrameDim"] = mScreenRes;
+
+    // Input resources
+    var["gVBuffer"] = renderData.getResource(kInputVBuffer)->asTexture();
+    var["gFinalGatherReservoir"] = mpFinalGatherReservoir[mFrameCount % 2];
+    var["gCausticReservoir"] = mpCausticReservoir[mFrameCount % 2];
+    var["gEmission"] = mpEmission;
+
+    // Output resources
+    var["gOutColor"] = renderData.getResource(kOutputColor)->asTexture();
+
+    // Execute Compute Pass
+    const uint2 targetDim = renderData.getDefaultTextureDims();
+    FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+    mpEvaluatePhotonDifferentialsReservoirsPass->execute(pRenderContext, uint3(targetDim, 1u));
 }
 
 DefineList ReSTIR_FPDG::getMaterialDefines()
@@ -585,4 +870,7 @@ void ReSTIR_FPDG::RaytracingProgramHelper::initProgramVars(ref<Device>& pDevice,
     pProgram->setTypeConformances(pScene->getTypeConformances()); //?
 
     pVars = RtProgramVars::create(pDevice, pProgram, pBindingTable);
+
+    auto var = pVars->getRootVar();
+    pSampleGenerator->bindShaderData(var);
 }
