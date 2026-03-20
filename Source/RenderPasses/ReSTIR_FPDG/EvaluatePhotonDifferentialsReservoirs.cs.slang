@@ -5,6 +5,7 @@ import Scene.RaytracingInline;
 import Utils.Sampling.SampleGenerator;
 import Rendering.RTXDI.RTXDI;
 import StructsAndHelpers;
+import PhotonDifferentials;
 
 Texture2D<PackedHitInfo> gVBuffer;
 StructuredBuffer<ReservoirFG> gFinalGatherReservoir;
@@ -50,26 +51,32 @@ float3 evaluateFinalGatherReservoir(uint2 pixel, inout SampleGenerator sg) {
     \param[in/out] Random Number Generator
     \return Radiance of the evaluated reserovir
 */
-float3 evaluateCausticReservoir(uint2 pixel, inout SampleGenerator sg) {
+float3 evaluateCausticReservoir(uint2 pixel, inout SampleGenerator sg)
+{
     float3 outColor = float3(0);
     ReservoirCaustic causticReservoir = gCausticReservoir[index2Dto1D(pixel, gFrameDim.x)];
-    if (!causticReservoir.isValid())
-        return outColor;
+
+    if (!causticReservoir.isValid()) return outColor;
 
     // Get surface and shading data
     HitInfo hitInfo = HitInfo(causticReservoir.sampleSurface);
-    let lod = ExplicitLodTextureSampler(0.f);
+    let lod = ExplicitLodTextureSampler(0.0f);
     ShadingData sd = loadShadingData(hitInfo, causticReservoir.sampleSurfaceView, lod);
     let mi = gScene.materials.getMaterialInstance(sd, lod, kMIHints);
     let bsdfProperties = mi.getProperties(sd);
 
+
     float NdotL = dot(bsdfProperties.guideNormal, causticReservoir.photonDir);
-    if (NdotL > 0) {
-        outColor = causticReservoir.wSum * causticReservoir.photonRadiance * mi.eval(sd, causticReservoir.photonDir, sg);
+    if (NdotL > 0)
+    {
+        // TODO : footprintArea and kernel weight could be fetched from CausticReservoir to avoid calculations.
+        float footprintArea;
+        float kernelWeight = evaluateDifferentialWeight(causticReservoir, sd.posW, footprintArea);
+
+        outColor = causticReservoir.wSum * causticReservoir.photonRadiance * mi.eval(sd, causticReservoir.photonDir, sg) * kernelWeight / footprintArea;
         outColor /= NdotL; //NdotL needs to be taken out of Falcors BSDF
         outColor *= causticReservoir.thp;
     }
-
     return outColor;
 }
 
@@ -111,7 +118,7 @@ void main(uint2 pixel: SV_DispatchThreadID)
         }
 
         //Eval ReSTIR FG
-        outColor += evaluateFinalGatherReservoir(pixel, sg);
+        //outColor += evaluateFinalGatherReservoir(pixel, sg);
         outColor += evaluateCausticReservoir(pixel, sg);
         //Emissive for (highly) specular materials (path length > 0)
         outColor += gEmission[pixel].xyz;

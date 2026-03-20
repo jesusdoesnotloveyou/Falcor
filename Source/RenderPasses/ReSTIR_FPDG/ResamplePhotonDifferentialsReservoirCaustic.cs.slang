@@ -7,6 +7,7 @@ import Utils.Color.ColorHelpers;
 import Utils.Math.MathHelpers;
 import Rendering.RTXDI.RTXDI;
 import StructsAndHelpers;
+import PhotonDifferentials;
 
 cbuffer CB
 {
@@ -30,10 +31,6 @@ RWStructuredBuffer<ReservoirCaustic> gCausticReservoir;
 
 static const uint kMIHints = (uint)MaterialInstanceHints::AdjustShadingNormal;
 
-inline float getPhotonRadius(ReservoirCaustic r) {
-    return r.pathLength == 0 ? gPhotonRadius.y : gPhotonRadius.x;
-}
-
 /*  Generalized Balance Heuristic with two samples
     \param[in] Reservoir which sample is used for MIS
     \param[in] Shading data of the resampling surface from the other sample
@@ -41,11 +38,18 @@ inline float getPhotonRadius(ReservoirCaustic r) {
     \param[in] Cofidence weight of the other sample
     \return MIS weight
 */
-float generalizedBalanceHeuristic(ReservoirCaustic r, ShadingData otherSD, BSDFProperties otherProps, uint otherC) {
+float generalizedBalanceHeuristic(ReservoirCaustic r, ShadingData otherSD, BSDFProperties otherProps, uint otherC)
+{
     float p0 = r.targetFunction * r.c;
     float p1 = 0;
-    if (length(otherSD.posW - r.photonPosW) < getPhotonRadius(r))   //Check if sample could have been collected from the surface of the other reservoir
-        p1 = evalApproximateBRDFPhoton(otherSD, otherProps, r.photonDir) * luminance(r.photonRadiance) * otherC;
+
+    float footprintArea;
+    float kernelWeight = evaluateDifferentialWeight(r, otherSD.posW, footprintArea);
+
+    if (kernelWeight > 0.0f)
+    {
+        p1 = evalApproximateBRDFPhoton(otherSD, otherProps, r.photonDir) * luminance(r.photonRadiance) * otherC * kernelWeight / footprintArea;
+    }
 
     float sum = (p0 + p1);
     if (sum > 0)
@@ -70,16 +74,19 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
     //Check if surfaces are similar and resampling can be performed
     bool normalThreshold = dot(otherSD.faceN, currentSD.faceN) < gNormalThreshold;
     bool pathThreshold = (other.pathLength != current.pathLength);
-    bool surfacesPosThreshold = length(currentSD.posW - otherSD.posW) >= (2 * getPhotonRadius(current));
-    if (normalThreshold || pathThreshold || surfacesPosThreshold)
-        return false;
+    // SurfacesPosThreshold check was removed here because the differential kernel handles it
+    //bool surfacesPosThreshold = length(currentSD.posW - otherSD.posW) >= (2 * getPhotonRadius(current));
+
+    if (normalThreshold || pathThreshold /*|| surfacesPosThreshold*/) return false;
 
     //Needed reservoir variables
     float w_0, w_1 = 0;
     float wSum = 0;
    
-    //Get ReSTIR weight of current reservoir
+    // Get ReSTIR weight of current reservoir
+    // See Gentle introduction in ReSTIR, or ReSTIR-FG papers for more details
     if (current.isValid()) {
+        // See Veach MIS ch.9
         float mis = generalizedBalanceHeuristic(current, otherSD, otherProps, other.c);
         w_0 = mis * current.targetFunction * current.wSum;
         wSum += w_0;
@@ -88,11 +95,15 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
     //Calculate ReSTIR weight for other reservoir sample
     float targetFunctionOther = 0.0;
     bool otherReservoirValid = other.isValid();
-    if (otherReservoirValid) {
+    if (otherReservoirValid)
+    {
+        float footprintArea;
         // Check if sample is part of the domain
-        if (length(currentSD.posW - other.photonPosW) < getPhotonRadius(other)) {
+        float kernelWeight = evaluateDifferentialWeight(other, currentSD.posW, footprintArea);
+        if (kernelWeight > 0.0f)
+        {
             float mis = generalizedBalanceHeuristic(other, currentSD, currentProps, current.c);
-            targetFunctionOther = evalApproximateBRDFPhoton(currentSD, currentProps, other.photonDir) * luminance(other.photonRadiance);
+            targetFunctionOther = evalApproximateBRDFPhoton(currentSD, currentProps, other.photonDir) * luminance(other.photonRadiance) * kernelWeight / footprintArea;
             w_1 = mis * targetFunctionOther * other.wSum;
         }
         wSum += w_1;
@@ -105,6 +116,10 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
         current.photonDir = other.photonDir;
         current.photonRadiance = other.photonRadiance;
         current.targetFunction = targetFunctionOther;
+
+        current.dPdx = other.dPdx;
+        current.dPdy = other.dPdy;
+        current.photonNormalW = other.photonNormalW;
     }
 
     //Increase confidence weights
@@ -118,7 +133,7 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
         current.wSum = 0;
 
     //If something went wrong, set reservoir to 0
-    if (isnan(current.wSum) || isinf(current.wSum))
+    if (isnan(current.wSum) || isinf(current.wSum)) 
         current.wSum = 0;
 
     return true;
@@ -135,18 +150,15 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
 bool resampleReservoir(inout ReservoirCaustic current, ShadingData currentSD, BSDFProperties currentBsdfProperties, inout SampleGenerator sg , int2 resamplePixel) {
 
     //Check if reservoir is inside the screen. 
-    if (any(resamplePixel < 0) || any(resamplePixel >= gFrameDim))
-        return false;
+    if (any(resamplePixel < 0) || any(resamplePixel >= gFrameDim)) return false;
 
     //Fetch the (spatio)temporal reservoir
     ReservoirCaustic temporal = gCausticReservoirPrev[index2Dto1D(resamplePixel, gFrameDim.x)];
     HitInfo temporalHit = HitInfo(temporal.sampleSurface);
-    if (!temporalHit.isValid()) {
-        return false;
-    }
+    if (!temporalHit.isValid()) return false;
 
     //Get shading datas
-    let lod = ExplicitLodTextureSampler(0.f);
+    let lod = ExplicitLodTextureSampler(0.0f);
     ShadingData temporalSD = loadShadingData(temporalHit, temporal.sampleSurfaceView, lod);
     let temporalMi = gScene.materials.getMaterialInstance(temporalSD, lod, kMIHints);
     let temporalBsdfProperties = temporalMi.getProperties(temporalSD);
@@ -160,31 +172,36 @@ bool resampleReservoir(inout ReservoirCaustic current, ShadingData currentSD, BS
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    let lod = ExplicitLodTextureSampler(0.f);
+    let lod = ExplicitLodTextureSampler(0.0f);
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount * 5 + 3);
 
     ReservoirCaustic current = gCausticReservoir[index2Dto1D(pixel, gFrameDim.x)];
     HitInfo currentHit = HitInfo(current.sampleSurface);
-
-    if (!currentHit.isValid())
-        return;
+    if (!currentHit.isValid()) return;
 
     //Get Shading Data
     ShadingData currentSD = loadShadingData(currentHit, current.sampleSurfaceView, lod);
     let currentMi = gScene.materials.getMaterialInstance(currentSD, lod, kMIHints);
     let currentBsdfProperties = currentMi.getProperties(currentSD);
 
-    // Precalculate the targetFunction
-    current.targetFunction = evalApproximateBRDFPhoton(currentSD, currentBsdfProperties, current.photonDir) * luminance(current.photonRadiance);
+    // TODO: could be fetched from the previous steps
+    float footprintArea;
+    float kernelWeight = evaluateDifferentialWeight(current, currentSD.posW, footprintArea);
+    if (kernelWeight > 0.0f) {
+        // Precalculate the targetFunction
+        current.targetFunction = evalApproximateBRDFPhoton(currentSD, currentBsdfProperties, current.photonDir) * luminance(current.photonRadiance) * kernelWeight / footprintArea;
+    }
+    else {
+        current.targetFunction = 0.0f;
+    }
 
     //
     // Temporal Resampling
     //
-
     // Reproject to the previous pixel using the motion vectors
     float2 motionOffset = gMVec[pixel] * float2(gFrameDim);
     float2 prevPixelF = motionOffset + float2(pixel) + float2(0.5);
-    float2 rndOffset = sampleNext2D(sg) - 0.5;
+    float2 rndOffset = sampleNext2D(sg) - 0.5f;
     prevPixelF += rndOffset;
     int2 prevPixel = int2(prevPixelF);
 
@@ -195,14 +212,15 @@ void main(uint2 pixel: SV_DispatchThreadID)
     //
     uint spatialSamples = resamplingSuccesfull ? gSpatialSamples : gSpatialSamples + gDisocclusionBoostSpatialSamples;
     for (uint i = 0; i < spatialSamples; i++) {
+        // TODO : sample a from a footprint somehow
         // Sample in a disc radius around the reprojected sample
         float2 spatialOffset = gSpatialRadius * sample_disk_concentric(sampleNext2D(sg));
         float2 spatialPixelF = prevPixelF + spatialOffset;
         int2 spatialPixel = int2(spatialPixelF);
 
+        // No success tracking (if it fails so only temporal result will be applied)
         resampleReservoir(current, currentSD, currentBsdfProperties, sg, spatialPixel);
     }
-
     //Store final reservoir
     gCausticReservoir[index2Dto1D(pixel, gFrameDim.x)] = current;
 }

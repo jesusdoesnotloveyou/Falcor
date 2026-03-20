@@ -70,15 +70,16 @@ bool combineReservoirsFG(inout ReservoirFG current, ShadingData currentSD, BSDFP
     bool jacobianThreshold = distToSurfaceOther <= gJacobianDistanceThreshold;
     bool normalThreshold = dot(otherSD.faceN, currentSD.faceN) < gNormalThreshold;
     bool pathThreshold = gUsePathThreshold ? (other.pathLength != current.pathLength) : false;
-    if (normalThreshold || pathThreshold || jacobianThreshold)
-        return false;
+
+    if (normalThreshold || pathThreshold || jacobianThreshold) return false;
 
     //Needed reservoir variables
     float w_0, w_1 = 0;
     float wSum = 0;
 
     //Get ReSTIR weight of current reservoir
-    if (current.isValid()) {
+    if (current.isValid())
+    {
         float mis = generalizedBalanceHeuristic(current, otherSD, otherProps, other.c);
         w_0 = mis * current.targetFunction * current.wSum;
         wSum += w_0;
@@ -87,7 +88,8 @@ bool combineReservoirsFG(inout ReservoirFG current, ShadingData currentSD, BSDFP
     //Calculate ReSTIR weight for other reservoir sample
     bool otherReservoirValid = other.isValid();
     float targetFunctionOther = 0.0;
-    if (otherReservoirValid) {
+    if (otherReservoirValid)
+    {
         //Check if sample can be shifted
         if (dispatchShadowRay(currentSD, -toSurfaceOther, distToSurfaceOther)) {
             // We can assume p1 is visible, as this was checked by the visibility ray in the line above
@@ -138,40 +140,35 @@ bool combineReservoirsFG(inout ReservoirFG current, ShadingData currentSD, BSDFP
 bool resampleReservoir(inout ReservoirFG current, ShadingData currentSD, BSDFProperties currentBsdfProperties, inout SampleGenerator sg , int2 resamplePixel) {
 
     //Check if reservoir is inside the screen. 
-    if (any(resamplePixel < 0) || any(resamplePixel >= gFrameDim))
-        return false;
+    if (any(resamplePixel < 0) || any(resamplePixel >= gFrameDim)) return false;
 
     //Fetch the (spatio)temporal reservoir
     ReservoirFG temporal = gFinalGatherReservoirPrev[index2Dto1D(resamplePixel, gFrameDim.x)];
     HitInfo temporalHit = HitInfo(temporal.sampleSurface);
-    if (!temporalHit.isValid()) {
-        return false;
-    }
+    if (!temporalHit.isValid()) return false;
 
     //Get shading datas
-    let lod = ExplicitLodTextureSampler(0.f);
+    let lod = ExplicitLodTextureSampler(0.0f);
     ShadingData temporalSD = loadShadingData(temporalHit, -temporal.sampleData.sampleView, lod);
     let temporalMi = gScene.materials.getMaterialInstance(temporalSD, lod, kMIHints);
     let temporalBsdfProperties = temporalMi.getProperties(temporalSD);
 
     //Combine both reservoirs
     bool valid = combineReservoirsFG(current, currentSD, currentBsdfProperties, temporal, temporalSD, temporalBsdfProperties, sg);
-
     return valid;
 }
 
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    let lod = ExplicitLodTextureSampler(0.f);
+    let lod = ExplicitLodTextureSampler(0.0f);
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount * 5 + 2);
 
     ReservoirFG current = gFinalGatherReservoir[index2Dto1D(pixel, gFrameDim.x)];
     HitInfo currentHit = HitInfo(current.sampleSurface);
 
     //Current camera hit misses the scene
-    if (!currentHit.isValid())
-        return;
+    if (!currentHit.isValid()) return;
 
     //Get Shading Data
     ShadingData currentSD = loadShadingData(currentHit, -current.sampleData.sampleView, lod);
@@ -185,7 +182,6 @@ void main(uint2 pixel: SV_DispatchThreadID)
     //
     // Temporal Resampling
     //
-
     // Reproject to the previous pixel using the motion vectors
     float2 motionOffset = gMVec[pixel] * float2(gFrameDim);
     float2 prevPixelF = motionOffset + float2(pixel) + float2(0.5);
