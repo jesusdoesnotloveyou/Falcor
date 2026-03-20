@@ -2,7 +2,8 @@
 
 import Utils.Sampling.SampleGenerator;
 
-// Struct for a photon differential. Could be packed tighter
+// Struct for a photon differential 80B.
+// Could be packed tighter
 struct PhotonDifferential {
     float3 flux;     // Incoming flux
     uint pathLenght; // Length of the photon path
@@ -27,6 +28,10 @@ struct PhotonDifferential {
         this._pad2 = 0;
         this._pad3 = 0;
     }
+
+    // Helper to check if this is a caustic photon (has differential data)
+    // If sqDistance > 0.0f then Distance > 0.0f
+    bool isCaustic() { return dot(dPdx, dPdx) > 0.0f || dot(dPdy, dPdy) > 0.0f; }
 }
 
 //

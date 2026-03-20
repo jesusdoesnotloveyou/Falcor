@@ -90,7 +90,7 @@ struct ReservoirFG {
     }
 }
 
-// Reservoir for a CausticSample 112B
+// Reservoir for a CausticSample 128B
 struct ReservoirCaustic {
     PackedHitInfo sampleSurface;    // HitSample 16B
     float3 thp;                     // Throughput used at the end
@@ -101,10 +101,12 @@ struct ReservoirCaustic {
     float photonDirY;               // (Incoming) photon direction (y)
     float3 photonRadiance;          // Radiance
     float photonDirZ;               // (Incoming) photon direction (z)
+    float3 dPdx;
     float wSum;                     // W and wSum
+    float3 dPdy;
     uint c;                         // Confidence weight
+    float3 photonNormalW;
     uint pathLength;                // Path Length
-    uint _pad;
 
     __init() {
         sampleSurface = {};
@@ -119,7 +121,6 @@ struct ReservoirCaustic {
         wSum = 0;
         c = 0;
         pathLength = 0;
-        _pad = 0;
     }
 
     // Photon direction helper
@@ -298,4 +299,42 @@ float evaluateFinalGatherSampleApproximateUnbiased(ReservoirFG r, ShadingData sd
     Li *= evalApproximateBRDF(sd, bsdfProperties, -toSurface);
 
     return Li;
+}
+
+/*
+    Photon differentials approach
+    Evaluates if a shading point falls inside the photon's differential footprint.
+    Returns a kernel weight (0.0 if outside, > 0.0 if inside) and outputs the footprint area.
+*/
+float evaluateDifferentialWeight(ReservoirCaustic r, float3 shadingPos, out float area)
+{
+    float3 delta = shadingPos - r.photonPosW;
+
+    // Calculate the area of the parallelogram formed by dPdx and dPdy
+    float3 crossP = cross(r.dPdx, r.dPdy);
+    area = length(crossP);
+
+    // Prevent division by zero for completely degenerate footprints
+    if (area < 1e-9f) return 0.0f;
+
+    // Reject pixels that are too far above/below the photon's tangent plane
+    float distToPlane = dot(delta, r.photonNormalW);
+    if (abs(distToPlane) > 0.05f) return 0.0f;
+
+    // Calculate Dual Basis vectors
+    float3 invX = cross(r.dPdy, r.photonNormalW) / area;
+    float3 invY = cross(r.photonNormalW, r.dPdx) / area;
+
+    // Project distance into the footprint's local 2D space (s, t)
+    float s = dot(delta, invX);
+    float t = dot(delta, invY);
+
+    // Calculate squared distance in the squished ellipse space
+    float distSq = s * s + t * t;
+
+    // If it's outside the unit circle in local space, it's outside the footprint
+    if (distSq >= 1.0f) return 0.0f;
+
+    // Epanechnikov kernel for smooth falloff
+    return (2.0f / M_PI) * (1.0f - distSq);
 }
