@@ -406,7 +406,7 @@ void ReSTIR_FPDG::setupResources(RenderContext* pRenderContext, const RenderData
 
         if (!mpPhotonData[i])
         {
-            mpPhotonData[i] = mpDevice->createStructuredBuffer(80u /*See the photonData struct in shader*/,
+            mpPhotonData[i] = mpDevice->createStructuredBuffer(64u /*See the photonData struct in shader*/,
                 mNumMaxPhotons[i], ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, MemoryType::DeviceLocal, nullptr, false);
             mpPhotonData[i]->setName("PhotonData" + std::to_string(i));
         }

@@ -2,31 +2,37 @@
 
 import Utils.Sampling.SampleGenerator;
 
-// Struct for a photon differential 80B.
+// Struct for a photon differential 64B.
 // Could be packed tighter
 struct PhotonDifferential {
     float3 flux;     // Incoming flux
-    uint pathLenght; // Length of the photon path
+    uint pathLength; // Length of the photon path
     float3 dir;      // Incoming direction
-    uint _pad0;
-    float3 normalW; // Face normal of the photon surface
-    uint _pad1;
+    float normalX;
     float3 dPdx; // Positional x derivative
-    uint _pad2;
+    float normalY;
     float3 dPdy; // Positional y derivative
-    uint _pad3;
+    float normalZ;
 
     __init() {
         this.dir = float3(0);
-        this.normalW = float3(0, 1, 0);
+        normalX = 0.0f;
+        normalY = 1.0f;
+        normalZ = 0.0f;
         this.flux = float3(0);
-        this.pathLenght = 0;
+        this.pathLength = 0;
         this.dPdx = float3(0);
         this.dPdy = float3(0);
-        this._pad0 = 0;
-        this._pad1 = 0;
-        this._pad2 = 0;
-        this._pad3 = 0;
+    }
+
+    // Normal helper. Face normal of the photon surface
+    property float3 normalW {
+        get { return float3(normalX, normalY, normalZ); }
+        set {
+            normalX = newValue.x;
+            normalY = newValue.y;
+            normalZ = newValue.z;
+        }
     }
 
     // Helper to check if this is a caustic photon (has differential data)

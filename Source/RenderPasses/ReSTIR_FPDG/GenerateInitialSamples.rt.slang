@@ -78,7 +78,6 @@ float3 collectPhotons(ShadingData sd, IMaterialInstance mi, float3 N, uint insta
         const uint instanceIdx = rayQuery.CandidateInstanceIndex();
         const uint primIdx = rayQuery.CandidatePrimitiveIndex();
 
-        //Check if ray origin is inside photon radius
         AABB photonAABB = gPhotonAABB[instanceIdx][primIdx];
         float radius = (photonAABB.maxPoint.x - photonAABB.minPoint.x) / 2.0;
         if (!hitSphere(photonAABB.center(), radius, sd.posW))
