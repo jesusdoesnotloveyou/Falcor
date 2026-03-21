@@ -6,10 +6,11 @@ import Utils.Sampling.SampleGenerator;
 import Utils.Color.ColorHelpers;
 import Rendering.RTXDI.RTXDI;
 import StructsAndHelpers;
+import PhotonDifferentials;
 
 Texture2D<PackedHitInfo> gVBuffer;
 
-StructuredBuffer<PhotonData> gPhotonData[2];
+StructuredBuffer<PhotonDifferential> gPhotonData[2];
 StructuredBuffer<AABB> gPhotonAABB[2];
 RaytracingAccelerationStructure gPhotonAS;
 
@@ -27,6 +28,7 @@ cbuffer CB
 
 static const bool kAlphaTest = true;
 static const float kRoughnessThreshold = ROUGHNESS_THRESHOLD;
+static const uint kMIHints = (uint)MaterialInstanceHints::AdjustShadingNormal;
 
 struct RayPayload
 {
@@ -51,7 +53,44 @@ bool hitSphere(const float3 center, const float radius, const float3 p)
     return dot(radiusTest, radiusTest) < radius * radius;
 }
 
-/*  Collects all photons in a radius and estimates radiance.
+bool evaluatePhotonFootprint(float3 surfacePos, float3 aabbCenter, PhotonDifferential photon, out float kernelWeight, out float footprintArea)
+{
+    kernelWeight = 0.0;
+
+    float3 crossP = cross(photon.dPdx, photon.dPdy);
+    footprintArea = length(crossP);
+
+    // To prevent possible zero dividing
+    //if (footprintArea < 1e-9f) return false;
+
+    footprintArea = max(1e-9f, footprintArea);
+
+    // Vector from photon center to shading point
+    float3 v = surfacePos - aabbCenter;
+
+    // Project v onto the photon's surface plane
+    float3 vPlane = v - dot(v, photon.normalW) * photon.normalW;
+
+    // Use the inverse basis to find local coordinates (s, t)
+    // This transforms the stretched parallelogram into a unit circle context
+    float3 invX = cross(photon.dPdy, photon.normalW) / footprintArea;
+    float3 invY = cross(photon.normalW, photon.dPdx) / footprintArea;
+
+    float s = dot(vPlane, invX);
+    float t = dot(vPlane, invY);
+
+    // Check if the point falls inside the footprint boundary
+    float d2 = s * s + t * t;
+    if (d2 <= 1.0f)
+    {
+        // See Epanechnikov Kernel: 2/pi * (1 - d2)
+        kernelWeight = M_2_PI * (1.0f - d2);
+        return true;
+    }
+    return false;
+}
+
+/*  Collects all photons in a radius and estimates radiance for Final Gathering.
     \param[in] Shading data of the gather query hit point
     \param[in] Material instance of the gather query hit point
     \param[in] Shading Normal of the hit point
@@ -59,7 +98,8 @@ bool hitSphere(const float3 center, const float radius, const float3 p)
     \param[in/out] Random Number Generator
     \return Radiance estimate of the gather point
 */
-float3 collectPhotons(ShadingData sd, IMaterialInstance mi, float3 N, uint instanceMask, inout SampleGenerator sg) {
+float3 collectPhotons(ShadingData sd, IMaterialInstance mi, float3 N, uint instanceMask, inout SampleGenerator sg)
+{
     float3 collectedRadiance = float3(0);
     //Prepare ray
     RayDesc ray;
@@ -73,21 +113,24 @@ float3 collectPhotons(ShadingData sd, IMaterialInstance mi, float3 N, uint insta
     rayQuery.TraceRayInline(gPhotonAS, RAY_FLAG_NONE, instanceMask, ray);
     while (rayQuery.Proceed()) {
         
-        if (rayQuery.CandidateType() != CANDIDATE_PROCEDURAL_PRIMITIVE)
-            continue;
+        if (rayQuery.CandidateType() != CANDIDATE_PROCEDURAL_PRIMITIVE) continue;
+
         const uint instanceIdx = rayQuery.CandidateInstanceIndex();
         const uint primIdx = rayQuery.CandidatePrimitiveIndex();
 
+        // Check if ray origin is inside photon radius
         AABB photonAABB = gPhotonAABB[instanceIdx][primIdx];
         float radius = (photonAABB.maxPoint.x - photonAABB.minPoint.x) / 2.0;
-        if (!hitSphere(photonAABB.center(), radius, sd.posW))
-            continue;
 
-        PhotonData photonData = gPhotonData[instanceIdx][primIdx];
+        if (!hitSphere(photonAABB.center(), radius, sd.posW)) continue;
+
+        // It is a photon. It uses only dir, flux, pathLenght and normalW from PhotonDifferential.
+        // TODO : sepate buffers for Photon (FG) and Photon differentials (FPDG)
+        PhotonDifferential photonData = gPhotonData[instanceIdx][primIdx];
         float NdotL = dot(photonData.dir, N);
+
         // Check for diffent surfaces (e.g. corners)
-        if ((dot(photonData.normalW, sd.faceN) < 0.6) || (NdotL <= 0))
-            continue;
+        if ((dot(photonData.normalW, sd.faceN) < 0.6) || (NdotL <= 0)) continue;
 
         // Radiance for current photon
         float3 bsdf = mi.eval(sd, photonData.dir, sg);
@@ -140,37 +183,32 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
     rayQuery.TraceRayInline(gPhotonAS, RAY_FLAG_NONE, instanceMask , ray);
     while (rayQuery.Proceed()) {
 
-        if (rayQuery.CandidateType() != CANDIDATE_PROCEDURAL_PRIMITIVE)
-            continue;
+        if (rayQuery.CandidateType() != CANDIDATE_PROCEDURAL_PRIMITIVE) continue;
+
         const uint instanceIdx = rayQuery.CandidateInstanceIndex();
         const uint primIdx = rayQuery.CandidatePrimitiveIndex();
         PhotonType type = (PhotonType)instanceIdx;
-        // Check if ray is inside photon radius
-        AABB photonAABB = gPhotonAABB[instanceIdx][primIdx];
-        float radius = (photonAABB.maxPoint.x - photonAABB.minPoint.x) / 2.0;
-        float3 center = photonAABB.center();
-        if (!hitSphere(center, radius, sd.posW))
-            continue;
 
-        PhotonData photonData = gPhotonData[instanceIdx][primIdx];
+        PhotonDifferential photonData = gPhotonData[instanceIdx][primIdx];
+        float3 center = gPhotonAABB[instanceIdx][primIdx].center();
+        // Check if ray is inside photon footprint
+        float kernelWeight, footprintArea;
+        if (!evaluatePhotonFootprint(sd.posW, center, photonData, kernelWeight, footprintArea)) continue;
 
         // If direct global photons should be collected and the photon is global, check the path length
         if (collectGlobalDirect && (type == PhotonType::Global)) {
-            if (photonData.pathLenght > 0)
-                continue;
+            if (photonData.pathLength > 0) continue;
         }
 
         // Check for diffent surfaces (e.g. corners)
         float NdotL = dot(photonData.dir, bsdfProperties.guideNormal);
-        if ((dot(photonData.normalW, sd.getOrientedFaceNormal()) < 0.6) || (NdotL <= 0))
-            continue;
+        if ((dot(photonData.normalW, sd.getOrientedFaceNormal()) < 0.6) || (NdotL <= 0)) continue;
 
         //Eval Radiance estimate
         float targetFunction = 0;
         if (NdotL > 0)
-            targetFunction = evalApproximateBRDFPhoton(sd, bsdfProperties, photonData.dir) * luminance(photonData.flux);
-        float photonDenom = M_PI * radius * radius;
-        float w =  targetFunction / photonDenom;
+            targetFunction = evalApproximateBRDFPhoton(sd, bsdfProperties, photonData.dir) * luminance(photonData.flux) * kernelWeight;
+        float w = targetFunction / footprintArea;
 
         //Update reservoir and resplace sample data if the new sample is selected
         causticReservoir.wSum += w;
@@ -180,6 +218,10 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
             causticReservoir.photonDir = photonData.dir;
             causticReservoir.photonRadiance = photonData.flux;
             causticReservoir.targetFunction = targetFunction;
+            // For resampling pass
+            causticReservoir.dPdx = photonData.dPdx;
+            causticReservoir.dPdy = photonData.dPdy;
+            causticReservoir.photonNormalW = photonData.normalW;
         }
     }
 
@@ -223,9 +265,8 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
         let lod = ExplicitLodTextureSampler(0);
 
         // Get Material properties
-        uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
         ShadingData sd = loadShadingData(hit, ray.Direction, lod);
-        let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+        let mi = gScene.materials.getMaterialInstance(sd, lod, kMIHints);
         let bsdfProperties = mi.getProperties(sd);
         bool hitIsRough = bsdfProperties.roughness > kRoughnessThreshold;
                 
@@ -330,8 +371,7 @@ void rayGen()
         SampleGenerator sg = SampleGenerator(pixel, gFrameCount * 5 + 1);
 
         ShadingData sd = loadShadingData(hitInfo, -viewDir, lod);
-        uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
-        let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+        let mi = gScene.materials.getMaterialInstance(sd, lod, kMIHints);
         let bsdfProperties = mi.getProperties(sd);
         float distanceToSurface = distance(sd.posW, gScene.camera.getPosition());
         

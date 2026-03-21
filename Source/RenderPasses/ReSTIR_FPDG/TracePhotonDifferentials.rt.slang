@@ -253,7 +253,6 @@ void rayGen()
     RayPayload rayPayload = RayPayload();
     
     bool storeAsCaustic = false;
-    bool reflectedDiffuse = false;
     float3 photonStartFlux = pls.flux;
     float3 thp = float3(1.0); //Throughput
 
@@ -304,14 +303,19 @@ void rayGen()
         let bsdfProperties = mi.getProperties(sd);
 
         float t = distance(ray.Origin, sd.posW);
+
+        // TODO: Ensure this returns a normal facing against the ray direction
         float3 N = sd.getOrientedFaceNormal();
+        if (dot(N, ray.Direction) > 0.0f)
+            N = -N;
 
         updateTransferRayDifferential(N, photonDifferential.dPdx, dDdx, ray.Direction, t);
         updateTransferRayDifferential(N, photonDifferential.dPdy, dDdy, ray.Direction, t);
 
         // Store Photon if a diffuse surface was hit
         photonDifferential.normalW = N;
-        reflectedDiffuse = bsdfProperties.roughness > kRoughnessThreshold;
+
+        bool reflectedDiffuse = bsdfProperties.roughness > kRoughnessThreshold;
         if (reflectedDiffuse)
         {
             PhotonType photonType = storeAsCaustic ? PhotonType::Caustic : PhotonType::Global;
@@ -330,17 +334,33 @@ void rayGen()
                 InterlockedAdd(gPhotonCounter[photonTypeIdx], 1u, photonInsertIndex);
                 if (photonInsertIndex <= kPhotonBufferSize[photonTypeIdx]) // after InterlockedAdd PhotonInsertIndex will be equal to the number of global or caustic photons
                 {
-                    // Photon differentials footprint
-                    float3 footprintExtents = 0.5f * (abs(photonDifferential.dPdx) + abs(photonDifferential.dPdy));
-                    footprintExtents = max(footprintExtents, float3(gPhotonRadius[photonTypeIdx]));
+                    AABB photonAABB;
+                    // Photon
+                    if (photonType == PhotonType::Global)
+                        photonAABB = AABB(sd.posW - gPhotonRadius[photonTypeIdx], sd.posW + gPhotonRadius[photonTypeIdx]);
+                    else
+                    {
+                        // Photon differentials footprint
+                        float3 footprintExtents = 0.5f * (abs(photonDifferential.dPdx) + abs(photonDifferential.dPdy));
+                        footprintExtents = max(footprintExtents, float3(gPhotonRadius[photonTypeIdx]));
+                        photonAABB = AABB(sd.posW - footprintExtents, sd.posW + footprintExtents);
+                    }
 
-                    // AABB photonAABB = AABB(sd.posW - gPhotonRadius[photonTypeIdx], sd.posW + gPhotonRadius[photonTypeIdx]);
-                    AABB photonAABB = AABB(sd.posW - footprintExtents, sd.posW + footprintExtents);
                     gPhotonAABB[photonTypeIdx][photonInsertIndex] = photonAABB;
-
                     gPhotonData[photonTypeIdx][photonInsertIndex] = photonDifferential;
                 }
             }
+
+            photonDifferential.dPdx = float3(0);
+            photonDifferential.dPdy = float3(0);
+            dDdx = float3(0);
+            dDdy = float3(0);
+
+            float3 tangent = perp_stark(N);
+            float3 bitangent = cross(N, tangent);
+            float beamSize = 0.01f;
+            photonDifferential.dPdx = tangent * beamSize;
+            photonDifferential.dPdy = bitangent * beamSize;
         }
 
         // Sample Photon bounce for next iteration
@@ -352,19 +372,36 @@ void rayGen()
 
         if (!reflectedDiffuse) // specular surface
         {
+            float3 bitangentW = perp_stark(bsdfProperties.guideNormal);
+            float3 tangentW = cross(bitangentW, bsdfProperties.guideNormal);
+
+            float uSizeX = dot(photonDifferential.dPdx, tangentW);
+            float vSizeX = dot(photonDifferential.dPdx, bitangentW);
+
+            float uSizeY = dot(photonDifferential.dPdy, tangentW);
+            float vSizeY = dot(photonDifferential.dPdy, bitangentW);
+
+            float3 dNdu = float3(0);
+            float3 dNdv = float3(0);
+
+            float3 dNdx = dNdu * uSizeX + dNdv * vSizeX; // Zero actually
+            float3 dNdy = dNdu * uSizeY + dNdv * vSizeY; // Zero actually
+
             if (transmission)
             {
-                // Approximate Relative IOR. You can replace 1.0/1.5 with sd.IoR if your BSDF setup exposes it.
-                float eta = 1.0f / 1.5f;
-                float3 dNdx = float3(0); // Zero for now. Assume flat dNdx = 0
+                bool entering = dot(ray.Direction, N) < 0.0f;
+
+                float currentIOR = entering ? 1.0f : sd.IoR;
+                float nextIOR = entering ? sd.IoR : 1.0f;
+                float eta = currentIOR / nextIOR;
+
                 updateRefractRayDifferential(ray.Direction, bsdfSample.wo, N, eta, dNdx, dDdx);
-                updateRefractRayDifferential(ray.Direction, bsdfSample.wo, N, eta, dNdx, dDdy);
+                updateRefractRayDifferential(ray.Direction, bsdfSample.wo, N, eta, dNdy, dDdy);
             }
             else
             {
-                float3 dNdx = float3(0); // Zero for now. Assume flat dNdx = 0
                 updateReflectRayDifferential(N, dNdx, dDdx, ray.Direction);
-                updateReflectRayDifferential(N, dNdx, dDdy, ray.Direction);
+                updateReflectRayDifferential(N, dNdy, dDdy, ray.Direction);
             }
         }
         else
@@ -372,6 +409,7 @@ void rayGen()
             // Diffuse bounce: Scatters the beam, resetting coherent directional spread
             dDdx = float3(0);
             dDdy = float3(0);
+
         }
 
         ray.Origin = sd.computeRayOrigin(!transmission); // false is for transmissions
@@ -394,6 +432,6 @@ void rayGen()
         storeAsCaustic = !reflectedDiffuse;
         photonDifferential.dir = -ray.Direction;
         photonDifferential.flux = photonStartFlux * thp;
-        photonDifferential.pathLenght++;
+        photonDifferential.pathLength++;
     }
 }
