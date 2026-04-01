@@ -152,7 +152,7 @@ private:
     bool mClearReservoir = true;                        // Clears both reservoirs
     bool mCanResample = false;                          // Resampling is only allowed if last iterations reservoir was created
     float mRelativeDepthThreshold = 0.15f;              // Relative Depth threshold (is neighbor 0.1 = 10% as near as the current depth)
-    float mNormalThreshold = 0.6f;                      // Cosine of maximum angle between both normals allowed
+    float mNormalThreshold = 0.906f;// 0.6f was before  // Cosine of maximum angle between both normals allowed (not more than 25 degrees)
     float mJacobianDistanceThreshold = 0.001f;          // Threshold for Jacobian distances
     bool mUsePathThreshold = false;                     // Enable resampling only if path length are the same
     bool mUsePhotonsForDirectLightInReflections = true; // Uses photons for direct light in reflections, else the final gather sample is used
