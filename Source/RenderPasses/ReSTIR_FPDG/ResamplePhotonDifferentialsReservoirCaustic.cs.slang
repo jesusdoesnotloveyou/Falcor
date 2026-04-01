@@ -77,7 +77,11 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
     // SurfacesPosThreshold check was removed here because the differential kernel handles it
     //bool surfacesPosThreshold = length(currentSD.posW - otherSD.posW) >= (2 * getPhotonRadius(current));
 
-    if (normalThreshold || pathThreshold /*|| surfacesPosThreshold*/) return false;
+    // 'PathThreshold' is commented since it might not be rational to exclude caustic paths if they differ
+    // in the number of geometry intersections, since the reflection/refraction process is quite complex,
+    // so it is possible that paths can converge even if they have different numbers of geometry intersections
+    // (maybe it is worth considering hybrid shift mapping here, but I am not sure that it will be applicable)
+    if (normalThreshold /*|| pathThreshold *//*|| surfacesPosThreshold*/) return false;
 
     //Needed reservoir variables
     float w_0, w_1 = 0;

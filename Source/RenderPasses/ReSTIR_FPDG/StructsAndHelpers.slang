@@ -1,5 +1,6 @@
 #include "Utils/Math/MathConstants.slangh"
 
+import Scene.Scene;
 import Scene.RaytracingInline;
 import Utils.Sampling.SampleGenerator;
 import Utils.Color.ColorHelpers;
@@ -118,8 +119,11 @@ struct ReservoirCaustic {
         photonDirY = 0;
         photonRadiance = float3(0);
         photonDirZ = 0;
+        dPdx = float3(0);
         wSum = 0;
+        dPdy = float3(0);
         c = 0;
+        photonNormalW = float3(0, 1, 0);
         pathLength = 0;
     }
 
@@ -148,11 +152,65 @@ struct ReservoirCaustic {
 ShadingData loadShadingData(const HitInfo hit, const float3 rayDir, const ITextureSampler lod)
 {
     const TriangleHit triangleHit = hit.getTriangleHit();
+    // Returns interpolated vertex attributes
     VertexData v = gScene.getVertexData(triangleHit);
     uint materialID = gScene.getMaterialID(triangleHit.instanceID);
     ShadingData sd = gScene.materials.prepareShadingData(v, materialID, -rayDir/*, lod*/);
     
     return sd;
+}
+
+/*  Ray Traced Caustics GPU Gems II
+    Load (does it?) vertex parameters and fills the dP and dN for triangle privitive.
+    The idea is to avoid calculation in CLH shader by passing Triangle Hit for further calculations here.
+    \param[in] InstanceID usually from Triangle Hit
+    \param[in] PrimitiveIndex usually from Triangle Hit
+    \param[in] Triangle attributes usually from Triangle Hit
+    \return ShadingData (is it?) of the
+*/
+VertexData getVertexAttributes(const HitInfo hit, out float3 dP1, out float3 dP2, out float3 dN1, out float3 dN2)
+{
+    const TriangleHit triangleHit = hit.getTriangleHit();
+
+    float3 barycentrics = triangleHit.getBarycentricWeights();
+    const GeometryInstanceID instanceID = triangleHit.instanceID;
+    const uint triangleIndex = triangleHit.primitiveIndex;
+
+    uint3 indices = gScene.getIndices(instanceID, triangleIndex);
+    VertexData v;
+    //v.posW = WorldRayOrigin() + WorldRayDirection() * RayTCurrent(); // Invalid since called from ray gen shader
+    v.normalW = float3(0.0f);
+    v.tangentW = float4(0.0f);
+    v.texC = float2(0.0f);
+
+    float3 P[3], N[3];
+    [unroll]
+    for (int i = 0; i < 3; i++)
+    {
+        StaticVertexData svd = gScene.getVertex(indices[i]);
+        P[i] = svd.position; 
+        N[i] = svd.normal;
+
+        v.texC += svd.texCrd * barycentrics[i];
+        v.normalW += N[i] * barycentrics[i];
+        //v.tangentW.xyz += 
+    }
+
+    const float4x4 worldMat = gScene.getWorldMatrix(instanceID);
+    const float3x3 worldInvTransposeMat = gScene.getInverseTransposeWorldMatrix(instanceID);
+    // Transform normal/bitangent to world space
+    v.normalW = mul(v.normalW, (float3x3)worldInvTransposeMat).xyz;
+    // tangent valid only if tangentW.w != 0
+    //v.tangentW.xyz = mul(v.tangentW.xyz, (float3x3)worldMat).xyz; // worldInvTransposeMat maybe?
+
+    dP1 = mul(P[1] - P[0], (float3x3)worldMat).xyz;
+    dP2 = mul(P[2] - P[0], (float3x3)worldMat).xyz;
+    dN1 = mul(N[1] - N[0], (float3x3)worldInvTransposeMat).xyz;
+    dN2 = mul(N[2] - N[0], (float3x3)worldInvTransposeMat).xyz;
+
+    // Handle invalid tangents gracefully (avoid NaN from normalization).
+    //v.tangentW.xyz = dot(v.tangentW.xyz, v.tangentW.xyz) > 0.f ? normalize(v.tangentW.xyz) : float3(0.0f, 0.0f, 0.0f);
+    return v;
 }
 
 /*  2D pixel index to 1D reservoir index
@@ -306,35 +364,34 @@ float evaluateFinalGatherSampleApproximateUnbiased(ReservoirFG r, ShadingData sd
     Evaluates if a shading point falls inside the photon's differential footprint.
     Returns a kernel weight (0.0 if outside, > 0.0 if inside) and outputs the footprint area.
 */
-float evaluateDifferentialWeight(ReservoirCaustic r, float3 shadingPos, out float area)
+float evaluateDifferentialWeight(ReservoirCaustic r, float3 shadingPos, out float footprintArea)
 {
     float3 delta = shadingPos - r.photonPosW;
 
     // Calculate the area of the parallelogram formed by dPdx and dPdy
-    float3 crossP = cross(r.dPdx, r.dPdy);
-    area = length(crossP);
+    footprintArea = length(cross(r.dPdx, r.dPdy));
 
     // Prevent division by zero for completely degenerate footprints
-    if (area < 1e-9f) return 0.0f;
+    if (footprintArea < 1e-9f) return 0.0f;
 
     // Reject pixels that are too far above/below the photon's tangent plane
-    float distToPlane = dot(delta, r.photonNormalW);
-    if (abs(distToPlane) > 0.05f) return 0.0f;
+    float distThreshold = dot(delta, r.photonNormalW);
+    if (abs(distThreshold) > 0.05f) return 0.0f;
 
     // Calculate Dual Basis vectors
-    float3 invX = cross(r.dPdy, r.photonNormalW) / area;
-    float3 invY = cross(r.photonNormalW, r.dPdx) / area;
+    float3 invX = cross(r.dPdy, r.photonNormalW) / footprintArea;
+    float3 invY = cross(r.photonNormalW, r.dPdx) / footprintArea;
 
     // Project distance into the footprint's local 2D space (s, t)
     float s = dot(delta, invX);
     float t = dot(delta, invY);
 
     // Calculate squared distance in the squished ellipse space
-    float distSq = s * s + t * t;
+    float d2 = s * s + t * t;
 
     // If it's outside the unit circle in local space, it's outside the footprint
-    if (distSq >= 1.0f) return 0.0f;
+    if (d2 > 1.0f) return 0.0f;
 
     // Epanechnikov kernel for smooth falloff
-    return (2.0f / M_PI) * (1.0f - distSq);
+    return M_2_PI * (1.0f - d2);
 }

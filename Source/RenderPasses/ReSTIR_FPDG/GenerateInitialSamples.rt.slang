@@ -57,12 +57,10 @@ bool evaluatePhotonFootprint(float3 surfacePos, float3 aabbCenter, PhotonDiffere
 {
     kernelWeight = 0.0;
 
-    float3 crossP = cross(photon.dPdx, photon.dPdy);
-    footprintArea = length(crossP);
+    footprintArea = length(cross(photon.dPdx, photon.dPdy));
 
     // To prevent possible zero dividing
     //if (footprintArea < 1e-9f) return false;
-
     footprintArea = max(1e-9f, footprintArea);
 
     // Vector from photon center to shading point
@@ -81,13 +79,11 @@ bool evaluatePhotonFootprint(float3 surfacePos, float3 aabbCenter, PhotonDiffere
 
     // Check if the point falls inside the footprint boundary
     float d2 = s * s + t * t;
-    if (d2 <= 1.0f)
-    {
-        // See Epanechnikov Kernel: 2/pi * (1 - d2)
-        kernelWeight = M_2_PI * (1.0f - d2);
-        return true;
-    }
-    return false;
+    if (d2 > 1.0f) return false;
+
+    // See Epanechnikov Kernel: 2/pi * (1 - d2)
+    kernelWeight = M_2_PI * (1.0f - d2);
+    return true;
 }
 
 /*  Collects all photons in a radius and estimates radiance for Final Gathering.
@@ -207,8 +203,8 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
         //Eval Radiance estimate
         float targetFunction = 0;
         if (NdotL > 0)
-            targetFunction = evalApproximateBRDFPhoton(sd, bsdfProperties, photonData.dir) * luminance(photonData.flux) * kernelWeight;
-        float w = targetFunction / footprintArea;
+            targetFunction = evalApproximateBRDFPhoton(sd, bsdfProperties, photonData.dir) * luminance(photonData.flux) * kernelWeight / footprintArea;
+        float w = targetFunction;
 
         //Update reservoir and resplace sample data if the new sample is selected
         causticReservoir.wSum += w;
