@@ -86,8 +86,39 @@ void updateRefractRayDifferential(float3 D, float3 R, float3 N, float eta, float
     N = normalize(N);
     float DN = dot(D, N);
     float RN = dot(R, N);
+
+    // To prevent total internal reflection. But I'm not really sure if it works or not.
+    // Should check the AAPS stuff (for util functions)
+    //if (RN <= 0.0001f) return;
+
     float mu = eta * DN - RN;
     float dDNdx = dot(dDdx, N) + dot(D, dNdx);
     float dmudx = (eta - eta * eta * DN / RN) * dDNdx;
     dDdx = eta * dDdx - (mu * dNdx + dmudx * N);
+}
+
+// Igehy's Normal Interpolated Triangles
+void calculateDNdx(float3 dP1, float3 dP2, float3 dN1, float3 dN2, float3 N, float3 dPdx, out float3 dNdx)
+{
+    float P11 = dot(dP1, dP1);
+    float P12 = dot(dP1, dP2);
+    float P22 = dot(dP2, dP2);
+
+    float Q1 = dot(dP1, dPdx);
+    float Q2 = dot(dP2, dPdx);
+
+    float delta = P11 * P22 - P12 * P12;
+    if (abs(delta) < 1e-8) // Gemini suggested
+    {
+        dNdx = float3(0.0f);
+        return;
+    }
+
+    float dudx = (Q1 * P22 - Q2 * P12) / delta;
+    float dvdx = (Q2 * P11 - Q1 * P12) / delta;
+
+    float n2 = dot(N, N);
+    float n1 = sqrt(n2);
+    dNdx = dudx * dN1 + dvdx * dN2;
+    dNdx = (n2 * dNdx - dot(N, dNdx) * N) / (n2 * n1);
 }
