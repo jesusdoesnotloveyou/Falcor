@@ -84,8 +84,7 @@ float3 fromLocalToWorld(const in float3 normal, float3 w)
 */
 bool createLightSample(inout SampleGenerator sg, out PhotonLightSample pls) {
     pls = {};
-    if (gScene.lightCollection.isEmpty())
-        return false;
+    if (gScene.lightCollection.isEmpty()) return false;
 
     // Randomly pick a triangle out of the global list with uniform probability
     const uint triangleCount = gScene.lightCollection.triangleCount;
@@ -126,7 +125,7 @@ bool createLightSample(inout SampleGenerator sg, out PhotonLightSample pls) {
     \param[out] Direction the photon should be dispatched
     \return true if light sample is valid
 */
-bool createLightSampleAnalytic(inout SampleGenerator sg, out PhotonLightSample pls, out float3 sampledDir)
+bool createLightSampleAnalytic(inout SampleGenerator sg, out PhotonLightSample pls, out float3 sampledDir, out float solidAngle)
 {
     pls = {};
     sampledDir = float3(0);
@@ -141,7 +140,6 @@ bool createLightSampleAnalytic(inout SampleGenerator sg, out PhotonLightSample p
     // Only Point(+ Spot) lights are supported (due to RTXDI)
     if (lightData.type != uint(LightType::Point)) return false;
 
-    float invLightPdf;
     float3 woLocal;
     float3 rnd = sampleNext3D(sg);
     rnd.z = 0;
@@ -155,11 +153,12 @@ bool createLightSampleAnalytic(inout SampleGenerator sg, out PhotonLightSample p
     {
         woLocal = sample_sphere(rnd.xy);
     }
-    invLightPdf = M_2PI * (1.f - spotAngle);
+    solidAngle = max(1e-4, M_2PI * (1.0f - spotAngle)); // spot angle equals -1 if it's point light
+
+    // pdf = 1.0f / lightCount, but in formulae we divide by the pdf -> multiplying by lightCount
+    float invLightPdf = solidAngle * lightCount; // Take the select pdf into account
 
     if (invLightPdf <= 0.f) return false;
-
-    invLightPdf *= lightCount; // Take the select pdf into account
 
     // Fill the photon light struct
     pls.posW = lightData.posW;
@@ -216,6 +215,7 @@ void rayGen()
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount * 5);
     RayDesc ray;
     PhotonLightSample pls;
+    float solidAngle = M_2PI; // Default fallback
 
     //Create a photon by sampling from emissive lights or analytic light sources
 #if USE_EMISSIVE_LIGHT
@@ -223,7 +223,7 @@ void rayGen()
 #endif
     { // Analytic light sample
         float3 sampleDir;
-        if (!createLightSampleAnalytic(sg, pls, sampleDir))
+        if (!createLightSampleAnalytic(sg, pls, sampleDir, solidAngle))
             return;
 
         ray.Direction = sampleDir;
@@ -239,7 +239,7 @@ void rayGen()
         if (lightDirPDF <= 0.f) return;
 
         ray.Direction = fromLocalToWorld(pls.normal, woLocal);
-        pls.flux *= M_PI; // Lambert Emitter
+        pls.flux *= M_PI / lightDirPDF; // Lambert Emitter
     }
 #endif
 
@@ -248,7 +248,7 @@ void rayGen()
     
     //Prepare the rest of the ray
     ray.Origin = pls.posW;
-    ray.TMin = 0.0;
+    ray.TMin = 0.0f;
     ray.TMax = FLT_MAX;
     RayPayload rayPayload = RayPayload();
     
@@ -263,8 +263,8 @@ void rayGen()
     photonDifferential.normalW = pls.normal;
 
     // initialize differentials
-    float3 tangent = perp_stark(pls.normal);
-    float3 bitangent = cross(pls.normal, tangent);
+    float3 bitangent = perp_stark(pls.normal);
+    float3 tangent = cross(bitangent, pls.normal);
     float3 dDdx = float3(0);
     float3 dDdy = float3(0);
 
@@ -272,8 +272,8 @@ void rayGen()
     if (!gUseAnalyticLights)
     {
         float a = sqrt(pls.area / totalPhotons);
-        photonDifferential.dPdx = tangent * a;
-        photonDifferential.dPdy = bitangent * a;
+        photonDifferential.dPdx = bitangent * a;
+        photonDifferential.dPdy = tangent * a;
     }
     else
 #endif
@@ -281,7 +281,8 @@ void rayGen()
         photonDifferential.dPdx = float3(0);
         photonDifferential.dPdy = float3(0);
 
-        float solidAnglePerPhoton = (4.0f * M_PI) / totalPhotons;
+        float solidAnglePerPhoton = solidAngle / totalPhotons;
+        //float solidAnglePerPhoton = M_PI / totalPhotons;
         float angularStep = sqrt(solidAnglePerPhoton);
         dDdx = cross(ray.Direction, tangent) * angularStep;
         dDdy = cross(ray.Direction, bitangent) * angularStep;
@@ -296,6 +297,11 @@ void rayGen()
         //Stop if photon leaves the scene
         if (!hit.isValid()) return;
 
+        float3 dP1, dP2, dN1, dN2;
+        // Prepare the shading data for calculating surface curvature
+        // TODO : tangent isn't valid; if hit isn't triangle hit data will be invalid
+        VertexData v = getVertexAttributes(hit, dP1, dP2, dN1, dN2);
+
         // Get shading infos and material properties
         let lod = ExplicitLodTextureSampler(0);
         ShadingData sd = loadShadingData(hit, ray.Direction, lod);
@@ -304,10 +310,17 @@ void rayGen()
 
         float t = distance(ray.Origin, sd.posW);
 
+        // Same as?
+        // float3 N = v.normalW;
+        // v.normalW = normalize(v.normalW);
         // TODO: Ensure this returns a normal facing against the ray direction
         float3 N = sd.getOrientedFaceNormal();
         if (dot(N, ray.Direction) > 0.0f)
+        {
             N = -N;
+            dN1 = -dN1;
+            dN2 = -dN2;
+        }
 
         updateTransferRayDifferential(N, photonDifferential.dPdx, dDdx, ray.Direction, t);
         updateTransferRayDifferential(N, photonDifferential.dPdy, dDdy, ray.Direction, t);
@@ -320,45 +333,54 @@ void rayGen()
         {
             PhotonType photonType = storeAsCaustic ? PhotonType::Caustic : PhotonType::Global;
             //Global photons can be rejected. The flux of the stored ones should be increased by the inverse of the rejection probability
-            bool storePhoton = true;
+            //bool storePhoton = true;
+            uint photonTypeIdx = (uint)photonType;
+            uint photonInsertIndex = 0;
+            AABB photonAABB = {};
             if (photonType == PhotonType::Global)
             {
-                storePhoton = sampleNext1D(sg) <= gGlobalRejectionProb;
-                photonDifferential.flux *= invRejection;
-            }
-            //Insert photon into buffer using a counter with interlocked add
-            if (storePhoton)
-            {
-                uint photonTypeIdx = (uint)photonType;
-                uint photonInsertIndex = 0;
-                InterlockedAdd(gPhotonCounter[photonTypeIdx], 1u, photonInsertIndex);
-                if (photonInsertIndex <= kPhotonBufferSize[photonTypeIdx]) // after InterlockedAdd PhotonInsertIndex will be equal to the number of global or caustic photons
+                bool storePhoton = sampleNext1D(sg) <= gGlobalRejectionProb;
+                if (storePhoton)
                 {
-                    AABB photonAABB;
-                    // Photon
-                    if (photonType == PhotonType::Global)
-                        photonAABB = AABB(sd.posW - gPhotonRadius[photonTypeIdx], sd.posW + gPhotonRadius[photonTypeIdx]);
-                    else
+                    // Insert photon into buffer using a counter with interlocked add
+                    // After InterlockedAdd PhotonInsertIndex will be equal to the number of global photons
+                    InterlockedAdd(gPhotonCounter[photonTypeIdx], 1u, photonInsertIndex);
+                    if (photonInsertIndex <= kPhotonBufferSize[photonTypeIdx])
                     {
-                        // Photon differentials footprint
-                        float3 footprintExtents = 0.5f * (abs(photonDifferential.dPdx) + abs(photonDifferential.dPdy));
-                        footprintExtents = max(footprintExtents, float3(gPhotonRadius[photonTypeIdx]));
-                        photonAABB = AABB(sd.posW - footprintExtents, sd.posW + footprintExtents);
-                    }
+                        photonAABB = AABB(sd.posW - gPhotonRadius[photonTypeIdx], sd.posW + gPhotonRadius[photonTypeIdx]);
+                        photonDifferential.flux *= invRejection;
 
+                        gPhotonAABB[photonTypeIdx][photonInsertIndex] = photonAABB;
+                        gPhotonData[photonTypeIdx][photonInsertIndex] = photonDifferential;
+                    }
+                }
+            }
+            else
+            {
+                // Insert photon into buffer using a counter with interlocked add
+                // After InterlockedAdd PhotonInsertIndex will be equal to the number of caustic photons
+                InterlockedAdd(gPhotonCounter[photonTypeIdx], 1u, photonInsertIndex);
+                if (photonInsertIndex <= kPhotonBufferSize[photonTypeIdx])
+                {
+                    // TO DO: adjacent value
+                    float maxFootprint = 0.01f; 
+                    // Photon footprint
+                    float3 footprintExtents = 0.5f * (abs(photonDifferential.dPdx) + abs(photonDifferential.dPdy));
+                    //footprintExtents = max(footprintExtents, float3(gPhotonRadius[photonTypeIdx]));
+                    footprintExtents = clamp(footprintExtents, float3(gPhotonRadius[photonTypeIdx]), float3(maxFootprint));
+
+                    photonAABB = AABB(sd.posW - footprintExtents, sd.posW + footprintExtents);
                     gPhotonAABB[photonTypeIdx][photonInsertIndex] = photonAABB;
                     gPhotonData[photonTypeIdx][photonInsertIndex] = photonDifferential;
                 }
             }
 
-            photonDifferential.dPdx = float3(0);
-            photonDifferential.dPdy = float3(0);
             dDdx = float3(0);
             dDdy = float3(0);
 
             float3 tangent = perp_stark(N);
             float3 bitangent = cross(N, tangent);
-            float beamSize = 0.01f;
+            float beamSize = sqrt(length(cross(photonDifferential.dPdx, photonDifferential.dPdy)));
             photonDifferential.dPdx = tangent * beamSize;
             photonDifferential.dPdy = bitangent * beamSize;
         }
@@ -372,23 +394,15 @@ void rayGen()
 
         if (!reflectedDiffuse) // specular surface
         {
-            float3 bitangentW = perp_stark(bsdfProperties.guideNormal);
-            float3 tangentW = cross(bitangentW, bsdfProperties.guideNormal);
+            float3 dNdx = float3(0);
+            float3 dNdy = float3(0);
 
-            float uSizeX = dot(photonDifferential.dPdx, tangentW);
-            float vSizeX = dot(photonDifferential.dPdx, bitangentW);
-
-            float uSizeY = dot(photonDifferential.dPdy, tangentW);
-            float vSizeY = dot(photonDifferential.dPdy, bitangentW);
-
-            float3 dNdu = float3(0);
-            float3 dNdv = float3(0);
-
-            float3 dNdx = dNdu * uSizeX + dNdv * vSizeX; // Zero actually
-            float3 dNdy = dNdu * uSizeY + dNdv * vSizeY; // Zero actually
+            calculateDNdx(dP1, dP2, dN1, dN2, N, photonDifferential.dPdx, dNdx);
+            calculateDNdx(dP1, dP2, dN1, dN2, N, photonDifferential.dPdy, dNdy);
 
             if (transmission)
             {
+                // TODO: ensure that IoR calculation is correct
                 bool entering = dot(ray.Direction, N) < 0.0f;
 
                 float currentIOR = entering ? 1.0f : sd.IoR;
@@ -404,14 +418,7 @@ void rayGen()
                 updateReflectRayDifferential(N, dNdy, dDdy, ray.Direction);
             }
         }
-        else
-        {
-            // Diffuse bounce: Scatters the beam, resetting coherent directional spread
-            dDdx = float3(0);
-            dDdy = float3(0);
-
-        }
-
+        
         ray.Origin = sd.computeRayOrigin(!transmission); // false is for transmissions
         ray.Direction = bsdfSample.wo;
         thp *= bsdfSample.weight;
