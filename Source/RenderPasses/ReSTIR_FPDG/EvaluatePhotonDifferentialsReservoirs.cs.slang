@@ -71,7 +71,7 @@ float3 evaluateCausticReservoir(uint2 pixel, inout SampleGenerator sg)
     {
         // TODO : footprintArea and kernel weight could be fetched from CausticReservoir to avoid calculations.
         float footprintArea;
-        float kernelWeight = evaluateDifferentialWeight(causticReservoir, sd.posW, footprintArea);
+        float kernelWeight = evaluateDifferentialWeight(sd.posW, causticReservoir.photonPosW, causticReservoir.photonNormalW, causticReservoir.dPdx, causticReservoir.dPdy, footprintArea);
 
         outColor = causticReservoir.wSum * causticReservoir.photonRadiance * mi.eval(sd, causticReservoir.photonDir, sg) * kernelWeight / footprintArea;
         outColor /= NdotL; //NdotL needs to be taken out of Falcors BSDF
@@ -118,6 +118,7 @@ void main(uint2 pixel: SV_DispatchThreadID)
         }
 
         //Eval ReSTIR FG
+        // TO DO: does not work for now. The problem probably in global photons resampling
         //outColor += evaluateFinalGatherReservoir(pixel, sg);
         outColor += evaluateCausticReservoir(pixel, sg);
         //Emissive for (highly) specular materials (path length > 0)

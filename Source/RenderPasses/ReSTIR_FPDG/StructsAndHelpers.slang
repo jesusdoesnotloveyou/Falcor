@@ -42,6 +42,7 @@ struct FGSampleData {
     float normalY;
     float3 sampleView; //Incoming View
     float normalZ;
+    float4 pad0;
 
     __init() {
         posW = float3(0);
@@ -50,6 +51,7 @@ struct FGSampleData {
         normalZ = 0;
         radianceOut = float3(0);
         sampleView = float3(0);
+        pad0 = float4(0);
     }
 
     //Normal helper
@@ -178,7 +180,7 @@ VertexData getVertexAttributes(const HitInfo hit, out float3 dP1, out float3 dP2
 
     uint3 indices = gScene.getIndices(instanceID, triangleIndex);
     VertexData v;
-    //v.posW = WorldRayOrigin() + WorldRayDirection() * RayTCurrent(); // Invalid since called from ray gen shader
+    //v.posW = WorldRayOrigin() + WorldRayDirection() * RayTCurrent(); // Invalid if called not from _hit shader
     v.normalW = float3(0.0f);
     v.tangentW = float4(0.0f);
     v.texC = float2(0.0f);
@@ -357,41 +359,4 @@ float evaluateFinalGatherSampleApproximateUnbiased(ReservoirFG r, ShadingData sd
     Li *= evalApproximateBRDF(sd, bsdfProperties, -toSurface);
 
     return Li;
-}
-
-/*
-    Photon differentials approach
-    Evaluates if a shading point falls inside the photon's differential footprint.
-    Returns a kernel weight (0.0 if outside, > 0.0 if inside) and outputs the footprint area.
-*/
-float evaluateDifferentialWeight(ReservoirCaustic r, float3 shadingPos, out float footprintArea)
-{
-    float3 delta = shadingPos - r.photonPosW;
-
-    // Calculate the area of the parallelogram formed by dPdx and dPdy
-    footprintArea = length(cross(r.dPdx, r.dPdy));
-
-    // Prevent division by zero for completely degenerate footprints
-    if (footprintArea < 1e-9f) return 0.0f;
-
-    // Reject pixels that are too far above/below the photon's tangent plane
-    float distThreshold = dot(delta, r.photonNormalW);
-    if (abs(distThreshold) > 0.05f) return 0.0f;
-
-    // Calculate Dual Basis vectors
-    float3 invX = cross(r.dPdy, r.photonNormalW) / footprintArea;
-    float3 invY = cross(r.photonNormalW, r.dPdx) / footprintArea;
-
-    // Project distance into the footprint's local 2D space (s, t)
-    float s = dot(delta, invX);
-    float t = dot(delta, invY);
-
-    // Calculate squared distance in the squished ellipse space
-    float d2 = s * s + t * t;
-
-    // If it's outside the unit circle in local space, it's outside the footprint
-    if (d2 > 1.0f) return 0.0f;
-
-    // Epanechnikov kernel for smooth falloff
-    return M_2_PI * (1.0f - d2);
 }

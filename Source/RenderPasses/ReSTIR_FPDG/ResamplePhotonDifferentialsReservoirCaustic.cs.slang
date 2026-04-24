@@ -44,7 +44,7 @@ float generalizedBalanceHeuristic(ReservoirCaustic r, ShadingData otherSD, BSDFP
     float p1 = 0;
 
     float footprintArea;
-    float kernelWeight = evaluateDifferentialWeight(r, otherSD.posW, footprintArea);
+    float kernelWeight = evaluateDifferentialWeight(otherSD.posW, r.photonPosW, r.photonNormalW, r.dPdx, r.dPdy, footprintArea);
 
     if (kernelWeight > 0.0f)
     {
@@ -81,7 +81,7 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
     // in the number of geometry intersections, since the reflection/refraction process is quite complex,
     // so it is possible that paths can converge even if they have different numbers of geometry intersections
     // (maybe it is worth considering hybrid shift mapping here, but I am not sure that it will be applicable)
-    if (normalThreshold /*|| pathThreshold *//*|| surfacesPosThreshold*/) return false;
+    if (normalThreshold || pathThreshold /*|| surfacesPosThreshold*/) return false;
 
     //Needed reservoir variables
     float w_0, w_1 = 0;
@@ -103,7 +103,7 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
     {
         float footprintArea;
         // Check if sample is part of the domain
-        float kernelWeight = evaluateDifferentialWeight(other, currentSD.posW, footprintArea);
+        float kernelWeight = evaluateDifferentialWeight(currentSD.posW, other.photonPosW, other.photonNormalW, other.dPdx, other.dPdy, footprintArea);
         if (kernelWeight > 0.0f)
         {
             float mis = generalizedBalanceHeuristic(other, currentSD, currentProps, current.c);
@@ -190,7 +190,7 @@ void main(uint2 pixel: SV_DispatchThreadID)
 
     // TODO: could be fetched from the previous steps
     float footprintArea;
-    float kernelWeight = evaluateDifferentialWeight(current, currentSD.posW, footprintArea);
+    float kernelWeight = evaluateDifferentialWeight(currentSD.posW, current.photonPosW, current.photonNormalW, current.dPdx, current.dPdy, footprintArea);
     if (kernelWeight > 0.0f) {
         // Precalculate the targetFunction
         current.targetFunction = evalApproximateBRDFPhoton(currentSD, currentBsdfProperties, current.photonDir) * luminance(current.photonRadiance) * kernelWeight / footprintArea;

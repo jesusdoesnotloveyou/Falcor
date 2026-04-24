@@ -53,39 +53,6 @@ bool hitSphere(const float3 center, const float radius, const float3 p)
     return dot(radiusTest, radiusTest) < radius * radius;
 }
 
-bool evaluatePhotonFootprint(float3 surfacePos, float3 aabbCenter, PhotonDifferential photon, out float kernelWeight, out float footprintArea)
-{
-    kernelWeight = 0.0;
-
-    footprintArea = length(cross(photon.dPdx, photon.dPdy));
-
-    // To prevent possible zero dividing
-    //if (footprintArea < 1e-9f) return false;
-    footprintArea = max(1e-9f, footprintArea);
-
-    // Vector from photon center to shading point
-    float3 v = surfacePos - aabbCenter;
-
-    // Project v onto the photon's surface plane
-    float3 vPlane = v - dot(v, photon.normalW) * photon.normalW;
-
-    // Use the inverse basis to find local coordinates (s, t)
-    // This transforms the stretched parallelogram into a unit circle context
-    float3 invX = cross(photon.dPdy, photon.normalW) / footprintArea;
-    float3 invY = cross(photon.normalW, photon.dPdx) / footprintArea;
-
-    float s = dot(vPlane, invX);
-    float t = dot(vPlane, invY);
-
-    // Check if the point falls inside the footprint boundary
-    float d2 = s * s + t * t;
-    if (d2 > 1.0f) return false;
-
-    // See Epanechnikov Kernel: 2/pi * (1 - d2)
-    kernelWeight = M_2_PI * (1.0f - d2);
-    return true;
-}
-
 /*  Collects all photons in a radius and estimates radiance for Final Gathering.
     \param[in] Shading data of the gather query hit point
     \param[in] Material instance of the gather query hit point
@@ -188,8 +155,9 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
         PhotonDifferential photonData = gPhotonData[instanceIdx][primIdx];
         float3 center = gPhotonAABB[instanceIdx][primIdx].center();
         // Check if ray is inside photon footprint
-        float kernelWeight, footprintArea;
-        if (!evaluatePhotonFootprint(sd.posW, center, photonData, kernelWeight, footprintArea)) continue;
+        float footprintArea;
+        float kernelWeight = evaluateDifferentialWeight(sd.posW, center, photonData.normalW, photonData.dPdx, photonData.dPdy, footprintArea);
+        if (kernelWeight <= 0.0f) continue;
 
         // If direct global photons should be collected and the photon is global, check the path length
         if (collectGlobalDirect && (type == PhotonType::Global)) {
@@ -369,7 +337,7 @@ void rayGen()
         ShadingData sd = loadShadingData(hitInfo, -viewDir, lod);
         let mi = gScene.materials.getMaterialInstance(sd, lod, kMIHints);
         let bsdfProperties = mi.getProperties(sd);
-        float distanceToSurface = distance(sd.posW, gScene.camera.getPosition());
+        float distanceToSurface = distance(sd.posW, gScene.camera.getPosition()); // sd.posW is world position of ray hit from pixel
         
         // Set RTXDI data
         gRTXDI.setSurfaceData(pixel, sd.computeRayOrigin(), bsdfProperties.guideNormal, bsdfProperties.diffuseReflectionAlbedo, bsdfProperties.specularReflectance, bsdfProperties.roughness);
