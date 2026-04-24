@@ -313,11 +313,12 @@ void rayGen()
         // Same as?
         // float3 N = v.normalW;
         // v.normalW = normalize(v.normalW);
+
         // TODO: Ensure this returns a normal facing against the ray direction
         float3 N = sd.getOrientedFaceNormal();
         if (dot(N, ray.Direction) > 0.0f)
         {
-            N = -N;
+            N = -N; // seems like getOrientedFaceNormal is already flipped against ray direction, but i am not sure
             dN1 = -dN1;
             dN2 = -dN2;
         }
@@ -351,6 +352,10 @@ void rayGen()
                         photonDifferential.flux *= invRejection;
 
                         gPhotonAABB[photonTypeIdx][photonInsertIndex] = photonAABB;
+
+                        if (any(isnan(photonDifferential.flux)) || any(isinf(photonDifferential.flux))) {
+                            photonDifferential.flux = float3(0, 0, 1000);
+                        }
                         gPhotonData[photonTypeIdx][photonInsertIndex] = photonDifferential;
                     }
                 }
@@ -371,6 +376,11 @@ void rayGen()
 
                     photonAABB = AABB(sd.posW - footprintExtents, sd.posW + footprintExtents);
                     gPhotonAABB[photonTypeIdx][photonInsertIndex] = photonAABB;
+
+                    if (any(isnan(photonDifferential.flux)) || any(isinf(photonDifferential.flux))) {
+                            photonDifferential.flux = float3(0, 1000, 0);
+                        }
+
                     gPhotonData[photonTypeIdx][photonInsertIndex] = photonDifferential;
                 }
             }
@@ -438,7 +448,7 @@ void rayGen()
         // Update Photon
         storeAsCaustic = !reflectedDiffuse;
         photonDifferential.dir = -ray.Direction;
-        photonDifferential.flux = photonStartFlux * thp;
+        photonDifferential.flux = photonDifferential.flux * thp;
         photonDifferential.pathLength++;
     }
 }
