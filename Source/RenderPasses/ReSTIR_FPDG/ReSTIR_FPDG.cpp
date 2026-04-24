@@ -59,9 +59,22 @@ const Falcor::ChannelList kInputChannels{
 
 // Outputs
 const std::string kOutputColor = "color";
+const std::string kOutputEmission = "emission";
+const std::string kOutputDiffuseRadiance = "diffuseRadiance";
+const std::string kOutputSpecularRadiance = "specularRadiance";
+const std::string kOutputDiffuseReflectance = "diffuseReflectance";
+const std::string kOutputSpecularReflectance = "specularReflectance";
+const std::string kOutputResidualRadiance = "residualRadiance";     //The rest (transmission, delta)
 
-const Falcor::ChannelList kOutputChannels{{kOutputColor, "gOutColor", "HDR output color", false /*optional*/, ResourceFormat::RGBA32Float}};
-
+const Falcor::ChannelList kOutputChannels{
+    {kOutputColor,                  "gOutColor",                "HDR output color", false /*optional*/, ResourceFormat::RGBA32Float},
+    {kOutputEmission,               "gOutEmission",             "Output Emission", true /*optional*/, ResourceFormat::RGBA32Float},
+    {kOutputDiffuseRadiance,        "gOutDiffuseRadiance",      "Output demodulated diffuse color (linear)", true /*optional*/, ResourceFormat::RGBA32Float},
+    {kOutputSpecularRadiance,       "gOutSpecularRadiance",     "Output demodulated specular color (linear)", true /*optional*/, ResourceFormat::RGBA32Float},
+    {kOutputDiffuseReflectance,     "gOutDiffuseReflectance",   "Output primary surface diffuse reflectance", true /*optional*/, ResourceFormat::RGBA16Float},
+    {kOutputSpecularReflectance,    "gOutSpecularReflectance",  "Output primary surface specular reflectance", true /*optional*/, ResourceFormat::RGBA16Float},
+    {kOutputResidualRadiance,       "gOutResidualRadiance",     "Output residual color (transmission/delta)", true /*optional*/, ResourceFormat::RGBA32Float},
+};
 }; // namespace
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -196,7 +209,7 @@ void ReSTIR_FPDG::renderUI(Gui::Widgets& widget)
             changed |= groupGen.var("Light Store Probability", mGlobalPhotonRejection, 0.f, 1.f, 0.0001f);
             group.tooltip("Probability a photon light is stored on diffuse hit. Flux is scaled up appropriately");
 
-            changed |= groupGen.var("Max Bounces", mPhotonMaxBounces, 0u, 32u);
+            changed |= groupGen.var("Max Bounces", mPhotonMaxBounces, 0u, 10u); // set a cap of 10 bounces, since performance will drop drastically otherways
 
             groupGen.separator();
         }
