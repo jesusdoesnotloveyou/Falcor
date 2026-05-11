@@ -38,11 +38,11 @@
 namespace
 {
 const std::string kShaderFolder = "RenderPasses/ReSTIR_FPDG/";
-const std::string kShaderTracePhotons = kShaderFolder + "TracePhotonDifferentials.rt.slang";
+const std::string kShaderTracePhotons = kShaderFolder + "TracePass.rt.slang";
 const std::string kShaderGenInitialSamples = kShaderFolder + "GenerateInitialSamples.rt.slang";
-const std::string kShaderResamplingReservoirFG = kShaderFolder + "ResamplePhotonDifferentialsReservoirFG.cs.slang";
+const std::string kShaderResamplingReservoirFG = kShaderFolder + "ResampleReservoirFG.cs.slang";
 const std::string kShaderResamplingReservoirCaustic = kShaderFolder + "ResamplePhotonDifferentialsReservoirCaustic.cs.slang";
-const std::string kShaderEvaluateReservoirs = kShaderFolder + "EvaluatePhotonDifferentialsReservoirs.cs.slang";
+const std::string kShaderEvaluateReservoirs = kShaderFolder + "EvaluateReservoirs.cs.slang";
 
 const ShaderModel kShaderModel = ShaderModel::SM6_5;
 
