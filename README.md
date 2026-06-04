@@ -105,6 +105,13 @@ Note that these SDKs are not under the same license as Falcor, see [LICENSE.md](
 - [ORCA](https://developer.nvidia.com/orca): A collection of scenes and assets optimized for Falcor.
 - [Slang](https://github.com/shader-slang/slang): Falcor's shading language and compiler.
 
+## ReSTIR FPDG
+The sourse code for ReSTIR FPDG is located at Source/RenderPasses/ReSTIR_FPDG.
+The base ReSTIR FG method (source code adjusted for Falcor 8.0) is located at Source/RenderPasses/ReSTIRFGPass.
+
+### Limitations & Problems
+Occasionally, there's an issue with launching the ReSTIR FPDG project (the cause of which I still haven't determined). Work is underway to resolve this issue.
+
 ## Citation
 If you use Falcor in a research project leading to a publication, please cite the project.
 The BibTex entry is
