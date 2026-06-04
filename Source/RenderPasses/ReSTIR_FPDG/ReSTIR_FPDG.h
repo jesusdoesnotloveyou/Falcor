@@ -158,7 +158,7 @@ private:
     bool mUsePhotonsForDirectLightInReflections = true; // Uses photons for direct light in reflections, else the final gather sample is used
 
     // Photon Distribution
-    uint mPhotonMaxBounces = 10u;                       // Number of photon bounces
+    uint mPhotonMaxBounces = 4u;                       // Number of photon bounces
     float mGlobalPhotonRejection = 0.3f;                // Probability a global photon is stored
     uint mNumDispatchedPhotons = 2000000u;              // Number of photons dispatched
     uint2 mNumMaxPhotons = uint2(400000u, 300000u);     // Size of the photon buffer

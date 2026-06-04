@@ -122,3 +122,74 @@ void calculateDNdx(float3 dP1, float3 dP2, float3 dN1, float3 dN2, float3 N, flo
     dNdx = dudx * dN1 + dvdx * dN2;
     dNdx = (n2 * dNdx - dot(N, dNdx) * N) / (n2 * n1);
 }
+
+/*
+    Photon differentials approach
+    Evaluates if a shading point falls inside the photon's differential footprint.
+    Returns a kernel weight (0.0 if outside, > 0.0 if inside) and outputs the footprint area.
+
+    \param[in] surface position
+    \param[in] photon's position (photon's aabb center or position from reservoir)
+    \param[in] photon's normal
+    \param[in] photon's positional x derivative 
+    \param[in] photon's positional y derivative 
+    \param[in/out] footprint area
+*/
+float evaluateDifferentialWeight(float3 surfacePos, float3 photonPosW, float3 photonNormalW, float3 dPdx, float3 dPdy, out float footprintArea)
+{
+    float3 delta = surfacePos - photonPosW;
+
+    footprintArea = length(cross(dPdx, dPdy));
+    // Safe footprint area that prevents zero area
+    //footprintArea = (dot(dPdx, dPdx) + dot(dPdy, dPdy)) * 0.5f;
+
+    // To prevent large footprints
+    if (footprintArea < 1e-6f) return 0.0f;
+    //footprintArea = max(1e-9f, footprintArea);
+
+    // Project delta onto the photon's surface plane
+    float distToPlane = dot(delta, photonNormalW);
+    // Cull the point if it is too far from photon's plane
+    if (abs(distToPlane) > 0.01f) return 0.0f;
+    float3 vPlane = delta - distToPlane * photonNormalW;
+
+    // Dual basis stuff from PhotonDifferential paper
+    // Use the inverse basis to find local coordinates (s, t)
+    // This transforms the stretched parallelogram into a unit circle context
+    float3 invX = cross(dPdy, photonNormalW) / footprintArea;
+    float3 invY = cross(photonNormalW, dPdx) / footprintArea;
+
+    float s = dot(vPlane, invX);
+    float t = dot(vPlane, invY);
+
+    // Check if the point falls inside the footprint boundary
+    float d2 = s * s + t * t;
+    if (d2 > 1.0f) return 0.0f;
+
+    // See Epanechnikov Kernel: 2/pi * (1 - d2)
+    return M_2_PI * (1.0f - d2);
+}
+
+// REAL-TIME RAY TRACED CAUSTICS by Xueqing Yang and Yaobin Ouyang NVIDIA
+//float getArea(float3 dPdx, float3 dPdy)
+//{
+//    float area;
+//    if (gAreaType == 0)
+//    {
+//        area = (dot(dPdx, dPdx) + dot(dPdy, dPdy)) * 0.5;
+//    }
+//    else if (gAreaType == 1)
+//    {
+//        area = (length(dPdx) + length(dPdy));
+//        area *= area;
+//    }
+//    else if (gAreaType == 2)
+//    {
+//        area = max(dot(dPdx, dPdx), dot(dPdy, dPdy));
+//    }
+//    else
+//    {
+//        area = length(cross(dPdx, dPdy));
+//    }
+//    return area;
+//}

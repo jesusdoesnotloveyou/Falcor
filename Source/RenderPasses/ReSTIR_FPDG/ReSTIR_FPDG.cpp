@@ -38,11 +38,11 @@
 namespace
 {
 const std::string kShaderFolder = "RenderPasses/ReSTIR_FPDG/";
-const std::string kShaderTracePhotons = kShaderFolder + "TracePhotonDifferentials.rt.slang";
+const std::string kShaderTracePhotons = kShaderFolder + "TracePass.rt.slang";
 const std::string kShaderGenInitialSamples = kShaderFolder + "GenerateInitialSamples.rt.slang";
-const std::string kShaderResamplingReservoirFG = kShaderFolder + "ResamplePhotonDifferentialsReservoirFG.cs.slang";
+const std::string kShaderResamplingReservoirFG = kShaderFolder + "ResampleReservoirFG.cs.slang";
 const std::string kShaderResamplingReservoirCaustic = kShaderFolder + "ResamplePhotonDifferentialsReservoirCaustic.cs.slang";
-const std::string kShaderEvaluateReservoirs = kShaderFolder + "EvaluatePhotonDifferentialsReservoirs.cs.slang";
+const std::string kShaderEvaluateReservoirs = kShaderFolder + "EvaluateReservoirs.cs.slang";
 
 const ShaderModel kShaderModel = ShaderModel::SM6_5;
 
@@ -59,9 +59,22 @@ const Falcor::ChannelList kInputChannels{
 
 // Outputs
 const std::string kOutputColor = "color";
+const std::string kOutputEmission = "emission";
+const std::string kOutputDiffuseRadiance = "diffuseRadiance";
+const std::string kOutputSpecularRadiance = "specularRadiance";
+const std::string kOutputDiffuseReflectance = "diffuseReflectance";
+const std::string kOutputSpecularReflectance = "specularReflectance";
+const std::string kOutputResidualRadiance = "residualRadiance";     //The rest (transmission, delta)
 
-const Falcor::ChannelList kOutputChannels{{kOutputColor, "gOutColor", "HDR output color", false /*optional*/, ResourceFormat::RGBA32Float}};
-
+const Falcor::ChannelList kOutputChannels{
+    {kOutputColor,                  "gOutColor",                "HDR output color", false /*optional*/, ResourceFormat::RGBA32Float},
+    {kOutputEmission,               "gOutEmission",             "Output Emission", true /*optional*/, ResourceFormat::RGBA32Float},
+    {kOutputDiffuseRadiance,        "gOutDiffuseRadiance",      "Output demodulated diffuse color (linear)", true /*optional*/, ResourceFormat::RGBA32Float},
+    {kOutputSpecularRadiance,       "gOutSpecularRadiance",     "Output demodulated specular color (linear)", true /*optional*/, ResourceFormat::RGBA32Float},
+    {kOutputDiffuseReflectance,     "gOutDiffuseReflectance",   "Output primary surface diffuse reflectance", true /*optional*/, ResourceFormat::RGBA16Float},
+    {kOutputSpecularReflectance,    "gOutSpecularReflectance",  "Output primary surface specular reflectance", true /*optional*/, ResourceFormat::RGBA16Float},
+    {kOutputResidualRadiance,       "gOutResidualRadiance",     "Output residual color (transmission/delta)", true /*optional*/, ResourceFormat::RGBA32Float},
+};
 }; // namespace
 
 extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registry)
@@ -196,7 +209,7 @@ void ReSTIR_FPDG::renderUI(Gui::Widgets& widget)
             changed |= groupGen.var("Light Store Probability", mGlobalPhotonRejection, 0.f, 1.f, 0.0001f);
             group.tooltip("Probability a photon light is stored on diffuse hit. Flux is scaled up appropriately");
 
-            changed |= groupGen.var("Max Bounces", mPhotonMaxBounces, 0u, 32u);
+            changed |= groupGen.var("Max Bounces", mPhotonMaxBounces, 0u, 10u); // set a cap of 10 bounces, since performance will drop drastically otherways
 
             groupGen.separator();
         }
@@ -574,6 +587,7 @@ void ReSTIR_FPDG::tracePhotonDifferentialsPass(RenderContext* pRenderContext, co
 }
 
 // Works with 2-3 frames delay
+// TODO: Possible performance bottleneck: gpu-cpu stall -> need for ring buffer[3]
 void ReSTIR_FPDG::handlePhotonCounter(RenderContext* pRenderContext)
 {
     // Try this with raw d3d12 in your framework
@@ -791,10 +805,10 @@ void ReSTIR_FPDG::resampleReservoirCausticPass(RenderContext* pRenderContext, co
 
     // Input resources
     var["gMVec"] = renderData.getResource(kInputMotionVectors)->asTexture();
-    var["gCausticReservoirPrev"] = mpFinalGatherReservoir[(mFrameCount + 1) % 2];
+    var["gCausticReservoirPrev"] = mpCausticReservoir[(mFrameCount + 1) % 2];
 
     // In/Out resources
-    var["gCausticReservoir"] = mpFinalGatherReservoir[mFrameCount % 2];
+    var["gCausticReservoir"] = mpCausticReservoir[mFrameCount % 2];
 
     // Execute Compute Pass
     const uint2 targetDim = renderData.getDefaultTextureDims();
