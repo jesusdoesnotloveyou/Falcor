@@ -587,6 +587,7 @@ void ReSTIR_FPDG::tracePhotonDifferentialsPass(RenderContext* pRenderContext, co
 }
 
 // Works with 2-3 frames delay
+// TODO: Possible performance bottleneck: gpu-cpu stall -> need for ring buffer[3]
 void ReSTIR_FPDG::handlePhotonCounter(RenderContext* pRenderContext)
 {
     // Try this with raw d3d12 in your framework
@@ -804,10 +805,10 @@ void ReSTIR_FPDG::resampleReservoirCausticPass(RenderContext* pRenderContext, co
 
     // Input resources
     var["gMVec"] = renderData.getResource(kInputMotionVectors)->asTexture();
-    var["gCausticReservoirPrev"] = mpFinalGatherReservoir[(mFrameCount + 1) % 2];
+    var["gCausticReservoirPrev"] = mpCausticReservoir[(mFrameCount + 1) % 2];
 
     // In/Out resources
-    var["gCausticReservoir"] = mpFinalGatherReservoir[mFrameCount % 2];
+    var["gCausticReservoir"] = mpCausticReservoir[mFrameCount % 2];
 
     // Execute Compute Pass
     const uint2 targetDim = renderData.getDefaultTextureDims();
