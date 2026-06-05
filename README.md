@@ -109,6 +109,10 @@ Note that these SDKs are not under the same license as Falcor, see [LICENSE.md](
 The sourse code for ReSTIR FPDG is located at Source/RenderPasses/ReSTIR_FPDG.
 The base ReSTIR FG method (source code adjusted for Falcor 8.0) is located at Source/RenderPasses/ReSTIRFGPass.
 
+### Screenshots
+![](docs/images/ReSTIR-FPDG/demo_1.png)
+![](docs/images/ReSTIR-FPDG/demo_2.png)
+
 ### Limitations & Problems
 Occasionally, there's an issue with launching the ReSTIR FPDG project (the cause of which I still haven't determined). Work is underway to resolve this issue.
 
